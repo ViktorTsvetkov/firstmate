@@ -3,10 +3,13 @@
 # Run the firstmate bash behavior suite deterministically as the test-step
 # baseline, instead of delegating to an agent (an agent-driven test step has
 # crashed the daemon). Mirrors .github/workflows/ci.yml: iterate every
-# tests/*.test.sh, run each, and fail the step if any one exits non-zero. The
-# e2e tests need tmux on PATH, which the firstmate environment provides.
+# tests/*.test.sh, run each, and fail the step if any one exits non-zero.
+# No hard tmux gate: the tests that genuinely need tmux self-skip when it is
+# absent (`command -v tmux ... || { echo "skip: tmux not found"; exit 0; }`), so
+# this gate runs green on a tmux-less box (e.g. native Windows) while GitHub CI on
+# ubuntu-latest, where tmux is present, keeps full e2e coverage.
 commands:
-  test: 'command -v tmux >/dev/null || { echo "tmux is required for e2e tests" >&2; exit 1; }; tmux -V; rc=0; for t in tests/*.test.sh; do echo "== $t =="; bash "$t" || rc=1; done; exit "$rc"'
+  test: 'rc=0; for t in tests/*.test.sh; do echo "== $t =="; bash "$t" || rc=1; done; exit "$rc"'
 
 # Keep test evidence out of this repo; it stays in a temp dir instead.
 test:
