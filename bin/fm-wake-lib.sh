@@ -281,6 +281,14 @@ fm_lock_try_create() {
 }
 
 fm_lock_remove_path() {
+  # Dispatching entry point, like fm_lock_try_acquire / fm_lock_release: direct
+  # callers such as bin/fm-watch-arm.sh (clear_stale_recorded_watcher_lock) must
+  # remove the Windows lock's `owner` file too, or rmdir fails and the stale lock
+  # persists. POSIX (symlink lock, no owner file) runs the original body below.
+  if fm_is_windows; then
+    fm_lock_remove_path_win "$@"
+    return
+  fi
   local lockdir=$1 ownerdir
   if [ -L "$lockdir" ]; then
     ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
