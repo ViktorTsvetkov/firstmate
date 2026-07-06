@@ -110,7 +110,7 @@ BASE_REF=$(resolve_base_ref) \
 # tmux-only conformance run the tmux adapter's behavior is what is under test,
 # and that is unchanged by any later (e.g. non-tmux backend) addition to
 # fm-backend.sh's own dispatch surface.
-OLD_BIN_UNCHANGED_SIBLINGS="fm-guard.sh fm-tangle-lib.sh fm-tmux-lib.sh fm-marker-lib.sh fm-wake-lib.sh fm-classify-lib.sh fm-ff-lib.sh fm-config-inherit-lib.sh fm-tasks-axi-lib.sh fm-project-mode.sh fm-harness.sh fm-crew-state.sh fm-backend.sh"
+OLD_BIN_UNCHANGED_SIBLINGS="fm-guard.sh fm-tangle-lib.sh fm-tmux-lib.sh fm-marker-lib.sh fm-wake-lib.sh fm-platform-lib.sh fm-classify-lib.sh fm-ff-lib.sh fm-config-inherit-lib.sh fm-tasks-axi-lib.sh fm-project-mode.sh fm-harness.sh fm-crew-state.sh fm-backend.sh"
 OLD_BIN_REFACTORED="fm-send.sh fm-peek.sh fm-watch.sh fm-spawn.sh fm-teardown.sh"
 
 build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry point)
@@ -492,6 +492,30 @@ test_backend_validate_spawn_accepts_orca() {
   pass "fm_backend_validate_spawn: all implemented lifecycle backends are spawn-supported"
 }
 
+test_backend_platform_declarations_report_windows_support() {
+  local out saved=${FM_PLATFORM_IS_WINDOWS:-}
+  FM_PLATFORM_IS_WINDOWS=yes
+  fm_backend_platform_supported herdr || fail "herdr should be declared supported on Windows"
+  fm_backend_platform_supported orca || fail "orca should be declared supported on Windows"
+  if fm_backend_platform_supported tmux; then
+    fail "tmux should not be declared supported on Windows"
+  fi
+  out=$(fm_backend_platforms tmux)
+  assert_contains "$out" "posix" "tmux platform declaration should name POSIX support"
+  FM_PLATFORM_IS_WINDOWS=$saved
+  pass "fm_backend_platform_supported: Windows declarations mark herdr/orca supported and tmux unsupported"
+}
+
+test_backend_capability_declarations() {
+  assert_contains "$(fm_backend_capabilities herdr)" "native-busy" \
+    "herdr capabilities should declare its native busy-state support"
+  assert_contains "$(fm_backend_capabilities orca)" "owns-worktree" \
+    "orca capabilities should declare that Orca owns task worktrees"
+  assert_contains "$(fm_backend_capabilities tmux)" "send-key:Escape" \
+    "tmux capabilities should declare Escape key support"
+  pass "fm_backend_capabilities declares the current adapter capability facts"
+}
+
 test_meta_get_and_backend_of_meta() {
   local meta=$TMP_ROOT/meta-get.meta
   fm_write_meta "$meta" "window=firstmate:fm-x1" "harness=claude"
@@ -725,6 +749,14 @@ run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> 
 }
 
 test_spawn_conformance_old_vs_new() {
+  # WINDOWS-DEFER: the Windows port deliberately routes the task temp root through
+  # TMPDIR (fm_platform_temp_root honors TMPDIR on Windows), so the spawn's GOTMPDIR
+  # is intentionally NOT byte-identical to the pre-port /tmp build there. This is a
+  # POSIX strict-additivity conformance check; it self-skips on native Windows,
+  # mirroring the orca suite's WINDOWS-DEFER skip. ubuntu CI (POSIX) is authoritative.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) echo "skip: WINDOWS-DEFER fm-spawn conformance - Windows routes GOTMPDIR through TMPDIR by design (POSIX-only strict-additivity check)"; return 0 ;;
+  esac
   local old_bin fb proj wt data id log_old log_new out_old out_new
   local state_old state_new config_old config_new
   old_bin=$(build_old_bin spawn-old)
@@ -760,7 +792,7 @@ test_spawn_conformance_old_vs_new() {
   assert_contains "$(cat "$log_new")" $'\x1f''-l'$'\x1f'"CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions \"\$(cat '$data/$id/brief.md')\"" \
     "spawn tmux log missing the literal launch-command send"
 
-  rm -rf "/tmp/fm-$id"
+  rm -rf "$(fm_platform_temp_root)/fm-$id"
   pass "fm-spawn.sh: tmux command log and printed summary line are byte-identical old vs new for a ship-task claude spawn"
 }
 
@@ -886,7 +918,7 @@ test_spawn_default_backend_writes_no_meta_field() {
   expect_code 0 $? "explicit --backend tmux should spawn successfully"$'\n'"$out"
   assert_no_grep 'backend=' "$state/$id.meta" \
     "an explicit --backend tmux (the default) must not write backend= to meta (P1 compatibility contract)"
-  rm -rf "/tmp/fm-$id"
+  rm -rf "$(fm_platform_temp_root)/fm-$id"
   pass "fm-spawn.sh: an explicit --backend tmux resolves silently and writes no backend= (missing means tmux)"
 }
 
@@ -910,7 +942,7 @@ test_spawn_explicit_backend_flag_beats_autodetect_herdr_env() {
   expect_code 0 $? "explicit --backend tmux should spawn successfully even with HERDR_ENV=1 set"$'\n'"$out"
   assert_no_grep 'backend=' "$state/$id.meta" \
     "an explicit --backend tmux must win over an ambient HERDR_ENV=1 auto-detect marker"
-  rm -rf "/tmp/fm-$id"
+  rm -rf "$(fm_platform_temp_root)/fm-$id"
   pass "fm-spawn.sh: explicit --backend tmux wins over an ambient HERDR_ENV=1 auto-detect marker"
 }
 
@@ -940,7 +972,7 @@ test_spawn_autodetect_nesting_resolves_tmux_silently() {
   case "$out" in
     *NOTICE*) fail "auto-detecting tmux (even nested inside herdr) must stay silent, no NOTICE expected"$'\n'"$out" ;;
   esac
-  rm -rf "/tmp/fm-$id"
+  rm -rf "$(fm_platform_temp_root)/fm-$id"
   pass "fm-spawn.sh: auto-detect resolves nested tmux-in-herdr to tmux and stays silent end to end"
 }
 
@@ -958,6 +990,8 @@ test_backend_name_explicit_beats_detection
 test_backend_validate_refuses_unknown
 test_backend_source_shell_portable
 test_backend_validate_spawn_accepts_orca
+test_backend_platform_declarations_report_windows_support
+test_backend_capability_declarations
 test_meta_get_and_backend_of_meta
 test_resolve_selector_three_forms
 test_backend_of_selector_matches_explicit_target_meta

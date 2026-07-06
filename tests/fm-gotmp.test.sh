@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Behavior tests for per-task GOTMPDIR support (fm-gotmp).
 #
-# fm-spawn gives each task a temp root /tmp/fm-<id>/ with Go's build temp nested at
-# gotmp/, exports GOTMPDIR into the crewmate pane, and records tasktmp= in the task's
-# meta. fm-teardown reads tasktmp= and removes the whole root on cleanup.
+# fm-spawn gives each task a temp root under ${TMPDIR:-/tmp}/fm-<id>/ with Go's
+# build temp nested at gotmp/, exports GOTMPDIR into the crewmate pane, and records
+# tasktmp= in the task's meta. fm-teardown reads tasktmp= and removes the whole root
+# on cleanup.
 #
 # These tests exercise behavior directly: fm-teardown is run as a subprocess against a
 # fake FM_ROOT (built so the real script resolves into it), with stub helper scripts.
@@ -14,6 +15,11 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
+
+# These tests build fake firstmate roots and expect symlinked scripts to resolve
+# against those roots. Ambient home/root overrides from a live firstmate session
+# would shadow the fixtures.
+unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE
 
 fail() {
   printf 'not ok - %s\n' "$1" >&2
@@ -50,6 +56,7 @@ make_fake_root() {
   # tmux adapter; both are unchanged by this suite's fixture, just newly
   # required siblings since the P1 backend extraction).
   ln -s "$ROOT/bin/fm-backend.sh" "$fake/bin/fm-backend.sh"
+  ln -s "$ROOT/bin/fm-platform-lib.sh" "$fake/bin/fm-platform-lib.sh"
   ln -s "$ROOT/bin/backends/tmux.sh" "$fake/bin/backends/tmux.sh"
   ln -s "$ROOT/bin/fm-tmux-lib.sh" "$fake/bin/fm-tmux-lib.sh"
   # fm-guard.sh: stub (teardown calls it with `|| true`).
@@ -96,14 +103,22 @@ test_spawn_contract_and_mkdir_pattern() {
     || fail "fm-spawn missing: tasktmp= line in meta write"
   grep -F 'export GOTMPDIR=' "$SPAWN" >/dev/null \
     || fail "fm-spawn missing: GOTMPDIR export into pane"
+  # shellcheck disable=SC2016  # single quotes are deliberate: literal source string
+  grep -F 'sq_gotmpdir=$(shell_quote "$TASK_TMP/gotmp")' "$SPAWN" >/dev/null \
+    || fail "fm-spawn missing: shell-quoted GOTMPDIR export value"
+  # shellcheck disable=SC2016  # single quotes are deliberate: literal source string
+  grep -F 'TASK_TMP="$(fm_platform_temp_root)/fm-$ID"' "$SPAWN" >/dev/null \
+    || fail "fm-spawn missing: task temp root routed through fm_platform_temp_root"
   # Behavioral: the mkdir + meta-write pattern spawn uses must produce a gotmp dir and
   # a meta line whose value the teardown grep (tasktmp=, cut -d= -f2-) reads back whole.
   local id=spawn-sim-z1
   local sim_root="$TMP_ROOT/$id-root"
-  local task_tmp="$sim_root/tmp/fm-$id"
+  local spawn_tmp_root="$sim_root/custom-tmp"
+  local task_tmp="$spawn_tmp_root/fm-$id"
   mkdir -p "$sim_root/state"
   # Replicate spawn's exact mkdir + meta-write lines.
-  TASK_TMP="$task_tmp"
+  TMPDIR="$spawn_tmp_root"
+  TASK_TMP="${TMPDIR:-/tmp}/fm-$id"
   mkdir -p "$TASK_TMP/gotmp"
   {
     echo "tasktmp=$TASK_TMP"
@@ -144,6 +159,7 @@ test_teardown_skips_gracefully_without_tasktmp() {
   mkdir -p "$fake/bin/backends" "$fake/state"
   ln -s "$TEARDOWN" "$fake/bin/fm-teardown.sh"
   ln -s "$ROOT/bin/fm-backend.sh" "$fake/bin/fm-backend.sh"
+  ln -s "$ROOT/bin/fm-platform-lib.sh" "$fake/bin/fm-platform-lib.sh"
   ln -s "$ROOT/bin/backends/tmux.sh" "$fake/bin/backends/tmux.sh"
   ln -s "$ROOT/bin/fm-tmux-lib.sh" "$fake/bin/fm-tmux-lib.sh"
   cat > "$fake/bin/fm-guard.sh" <<'SH'
