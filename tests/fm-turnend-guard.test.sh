@@ -96,6 +96,7 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-platform-lib.sh" "$dir/bin/fm-platform-lib.sh"
   chmod +x "$dir/bin/fm-turnend-guard.sh"
 }
 
