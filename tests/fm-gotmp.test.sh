@@ -104,6 +104,9 @@ test_spawn_contract_and_mkdir_pattern() {
   grep -F 'export GOTMPDIR=' "$SPAWN" >/dev/null \
     || fail "fm-spawn missing: GOTMPDIR export into pane"
   # shellcheck disable=SC2016  # single quotes are deliberate: literal source string
+  grep -F 'sq_gotmpdir=$(shell_quote "$TASK_TMP/gotmp")' "$SPAWN" >/dev/null \
+    || fail "fm-spawn missing: shell-quoted GOTMPDIR export value"
+  # shellcheck disable=SC2016  # single quotes are deliberate: literal source string
   grep -F 'TASK_TMP="$(fm_platform_temp_root)/fm-$ID"' "$SPAWN" >/dev/null \
     || fail "fm-spawn missing: task temp root routed through fm_platform_temp_root"
   # Behavioral: the mkdir + meta-write pattern spawn uses must produce a gotmp dir and

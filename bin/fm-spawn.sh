@@ -999,7 +999,8 @@ fi
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
-spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+sq_gotmpdir=$(shell_quote "$TASK_TMP/gotmp")
+spawn_send_text_line "$T" "export GOTMPDIR=$sq_gotmpdir"
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3

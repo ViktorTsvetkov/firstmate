@@ -493,7 +493,7 @@ test_backend_validate_spawn_accepts_orca() {
 }
 
 test_backend_platform_declarations_report_windows_support() {
-  local out saved=${FM_PLATFORM_IS_WINDOWS:-}
+  local out saved_windows=${FM_PLATFORM_IS_WINDOWS:-} saved_uname=${FM_PLATFORM_UNAME:-}
   FM_PLATFORM_IS_WINDOWS=yes
   fm_backend_platform_supported herdr || fail "herdr should be declared supported on Windows"
   fm_backend_platform_supported orca || fail "orca should be declared supported on Windows"
@@ -502,8 +502,22 @@ test_backend_platform_declarations_report_windows_support() {
   fi
   out=$(fm_backend_platforms tmux)
   assert_contains "$out" "posix" "tmux platform declaration should name POSIX support"
-  FM_PLATFORM_IS_WINDOWS=$saved
-  pass "fm_backend_platform_supported: Windows declarations mark herdr/orca supported and tmux unsupported"
+
+  FM_PLATFORM_IS_WINDOWS=no
+  FM_PLATFORM_UNAME=Linux
+  fm_backend_platform_supported tmux || fail "tmux should be declared supported on POSIX"
+  fm_backend_platform_supported herdr || fail "herdr should be declared supported on POSIX"
+  if fm_backend_platform_supported cmux; then
+    fail "cmux should not be declared supported on Linux"
+  fi
+
+  FM_PLATFORM_UNAME=Darwin
+  fm_backend_platform_supported tmux || fail "tmux should be declared supported on macOS via POSIX"
+  fm_backend_platform_supported cmux || fail "cmux should be declared supported on macOS"
+
+  FM_PLATFORM_IS_WINDOWS=$saved_windows
+  FM_PLATFORM_UNAME=$saved_uname
+  pass "fm_backend_platform_supported: declarations are enforced for Windows, POSIX, and macOS"
 }
 
 test_backend_capability_declarations() {

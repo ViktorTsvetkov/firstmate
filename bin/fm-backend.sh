@@ -95,9 +95,12 @@ fm_backend_platform_supported() {  # <name>
   platforms=$(fm_backend_platforms "$1") || return 1
   if fm_platform_is_windows; then
     fm_backend_list_contains "$platforms" windows
-  else
+    return
+  fi
+  if fm_platform_is_macos && fm_backend_list_contains "$platforms" macos; then
     return 0
   fi
+  fm_backend_list_contains "$platforms" posix
 }
 
 # fm_backend_list_contains: whitespace-delimited membership without relying on
