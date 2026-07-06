@@ -588,19 +588,35 @@ test_bootstrap_opt_out_cleanup() {
 
 test_bootstrap_x_shim_does_not_require_exec_bit() {
   local home fakebin out
-  home="$TMP_ROOT/boot-chmod-fail"; mkdir -p "$home"
-  printf 'FMX_PAIRING_TOKEN=tok-chmod\n' > "$home/.env"
-  fakebin=$(fm_fakebin "$home")
+  # A chmod that always fails, to exercise the exec-bit-failure path on both platforms.
+  # The platform branch is forced via FM_PLATFORM_IS_WINDOWS so ubuntu CI validates BOTH
+  # the Windows relaxation and the POSIX (upstream) behavior deterministically.
+  fakebin=$(fm_fakebin "$TMP_ROOT/boot-chmod-fail")
   cat > "$fakebin/chmod" <<'SH'
 #!/usr/bin/env bash
 exit 1
 SH
   chmod +x "$fakebin/chmod"
-  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
-  assert_contains "$out" "FMX: X mode on" "bootstrap should still arm X mode when chmod fails"
-  assert_present "$home/state/x-watch.check.sh" "chmod failure must not remove the check shim"
-  assert_grep "fm-x-poll.sh" "$home/state/x-watch.check.sh" "the shim must still exec the poll script"
-  pass "bootstrap X check shim is valid even when chmod cannot mark it executable"
+
+  # Windows: chmod +x is a no-op on Git-Bash, so a chmod failure must NOT block arming -
+  # the shim works without an exec bit and X mode still arms (the deliberate Windows relaxation).
+  home="$TMP_ROOT/boot-chmod-fail-win"; mkdir -p "$home"
+  printf 'FMX_PAIRING_TOKEN=tok-chmod\n' > "$home/.env"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_PLATFORM_IS_WINDOWS=yes "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  assert_contains "$out" "FMX: X mode on" "Windows: bootstrap must still arm X mode when chmod fails"
+  assert_present "$home/state/x-watch.check.sh" "Windows: chmod failure must not remove the check shim"
+  assert_grep "fm-x-poll.sh" "$home/state/x-watch.check.sh" "Windows: the shim must still exec the poll script"
+
+  # POSIX: the exec bit is load-bearing, so a chmod failure aborts arming exactly as upstream
+  # (fmx_arm_failed) - X mode is announced off and the artifacts are removed.
+  home="$TMP_ROOT/boot-chmod-fail-posix"; mkdir -p "$home"
+  printf 'FMX_PAIRING_TOKEN=tok-chmod\n' > "$home/.env"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_PLATFORM_IS_WINDOWS=no "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  assert_not_contains "$out" "FMX: X mode on" "POSIX: chmod failure must abort arming (upstream behavior)"
+  assert_contains "$out" "FMX: X mode off - failed to arm relay poll shim or 30s cadence" "POSIX: chmod failure must announce the arm failure (upstream)"
+  assert_absent "$home/state/x-watch.check.sh" "POSIX: aborted arming must not leave the check shim"
+
+  pass "bootstrap X check shim: Windows arms without exec bit; POSIX aborts on chmod failure (upstream)"
 }
 
 test_bootstrap_opt_out_reports_cleanup_failure() {
