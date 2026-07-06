@@ -213,8 +213,34 @@ SH
   printf '%s\n' "$dir"
 }
 
+# Windows-port test seam (STRICT ADDITIVE). Native Windows (Git Bash / Cygwin)
+# forks far more slowly than Linux, so timing-sensitive lock/watcher tests need
+# more patience and longer holds THERE while Linux/macOS run exactly as before:
+#   - FM_TEST_IS_WINDOWS lets a test branch to a Windows-only body (e.g. the
+#     white-box lock tests that poke at the platform's own lock representation).
+#   - FM_TEST_WAIT_SCALE scales poll-for-exit patience: a watcher that surfaces a
+#     wake and exits in well under a second on CI can need several seconds here.
+#   - FM_TEST_LOCK_HOLD is how long a lock-race winner holds so the held lock names
+#     a live pid until every contender has spawned; forking 40 shells takes ~1.5s
+#     on Windows, past a 1s hold, so the last contender would steal a dead-pid lock.
+# On Linux/macOS all three take their original values (scale 1, hold 1s), so the
+# assertions and timing are byte-for-byte what they were; only Windows differs.
+# shellcheck disable=SC2034 # FM_TEST_IS_WINDOWS is read by tests that source this helper.
+case "$(uname -s)" in
+  CYGWIN*|MINGW*|MSYS*)
+    FM_TEST_IS_WINDOWS=yes
+    FM_TEST_WAIT_SCALE=${FM_TEST_WAIT_SCALE:-6}
+    FM_TEST_LOCK_HOLD=${FM_TEST_LOCK_HOLD:-4}
+    ;;
+  *)
+    FM_TEST_IS_WINDOWS=no
+    FM_TEST_WAIT_SCALE=${FM_TEST_WAIT_SCALE:-1}
+    FM_TEST_LOCK_HOLD=${FM_TEST_LOCK_HOLD:-1}
+    ;;
+esac
+
 wait_for_exit() {
-  local pid=$1 limit=${2:-50} i=0
+  local pid=$1 limit=$(( ${2:-50} * FM_TEST_WAIT_SCALE )) i=0
   while [ "$i" -lt "$limit" ]; do
     if ! kill -0 "$pid" 2>/dev/null; then
       wait "$pid"

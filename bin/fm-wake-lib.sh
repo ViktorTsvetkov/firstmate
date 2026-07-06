@@ -15,6 +15,41 @@ fm_current_pid() {
   printf '%s\n' "${BASHPID:-$$}"
 }
 
+# Windows-port seam (STRICT ADDITIVE): true only on native Windows shells (Git
+# Bash / Cygwin / MSYS). Every Windows-specific code path in this file is selected
+# by this predicate; Linux/macOS fall through to the exact original behavior. The
+# result is memoized (one `uname` per process) and honors a pre-set FM_IS_WINDOWS
+# so tests can force either branch. Later phases build their platform conditionals
+# on this same predicate (the full fm-platform-lib.sh seam is a later phase).
+FM_IS_WINDOWS="${FM_IS_WINDOWS:-}"
+fm_is_windows() {
+  if [ -z "$FM_IS_WINDOWS" ]; then
+    case "$(uname -s 2>/dev/null)" in
+      CYGWIN*|MINGW*|MSYS*) FM_IS_WINDOWS=yes ;;
+      *) FM_IS_WINDOWS=no ;;
+    esac
+  fi
+  [ "$FM_IS_WINDOWS" = yes ]
+}
+
+# Read the first line of a file into the named variable with no subprocess.
+# WINDOWS-ONLY helper: the mkdir lock's hot path reads tiny single-line files
+# (pid, owner) thousands of times under contention, and on Windows a `$(cat file)`
+# per read - a fork plus an exec - dominates the runtime and makes the lock races
+# flaky. A builtin `read` costs zero forks. The POSIX lock path keeps its original
+# `cat` reads untouched; only fm_lock_*_win call this. Missing/empty file yields an
+# empty value, matching the old `cat ... 2>/dev/null` behavior.
+fm_read1() {  # fm_read1 <destvar> <file>
+  local -n __fm_r1_dest=$1
+  __fm_r1_dest=
+  [ -e "$2" ] || return 1
+  # Group the redirection so a failed OPEN is silenced too: under contention a
+  # peer may be mid-write and the open can transiently fail (on Windows a sharing
+  # violation surfaces as "Permission denied"). Swallow it, leave the value empty.
+  { IFS= read -r __fm_r1_dest < "$2"; } 2>/dev/null || true
+  return 0
+}
+
 fm_pid_alive() {
   local pid=$1
   case "$pid" in
@@ -28,9 +63,38 @@ fm_pid_identity() {
   case "$pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
+  # STRICT ADDITIVE: Linux/macOS keep the exact original `ps -o` fingerprint;
+  # native Windows (whose Cygwin `ps` rejects -o) takes a /proc fallback instead.
+  if fm_is_windows; then
+    fm_pid_identity_win "$pid"
+    return
+  fi
   out=$(ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
   [ -n "$out" ] || return 1
   printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
+}
+
+# WINDOWS-ONLY: fingerprint a pid when `ps -o` is unavailable (Cygwin/Git Bash).
+# Field 22 of /proc/<pid>/stat is the process start time (clock ticks since boot)
+# - a stable, pid-reuse-sensitive fingerprint, the same property lstart gives on
+# POSIX. comm (field 2) may contain spaces/parens, so key off the text after the
+# last ')'. Pair the start time with argv for the same identity `ps` yields.
+fm_pid_identity_win() {
+  local pid=$1 out rest starttime cmd
+  out=$(ps -p "$pid" -o lstart= -o command= 2>/dev/null)
+  if [ -n "$out" ]; then
+    printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
+    return 0
+  fi
+  [ -r "/proc/$pid/stat" ] || return 1
+  IFS= read -r out < "/proc/$pid/stat" 2>/dev/null || return 1
+  rest=${out##*) }
+  # shellcheck disable=SC2086 # deliberate word-splitting to index stat fields.
+  set -- $rest
+  starttime=${20:-}
+  [ -n "$starttime" ] || return 1
+  cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+  printf '%s %s\n' "$starttime" "$cmd"
 }
 
 fm_path_mtime() {
@@ -75,6 +139,20 @@ fm_watcher_healthy() {
   FM_WATCHER_HEALTHY_PID=$pid
   return 0
 }
+
+# ==========================================================================
+# Lock primitives.
+#
+# STRICT ADDITIVE PORT: the lock has one behavior contract and two mechanisms.
+#   - POSIX (Linux/macOS): an atomic symlink whose target names a private owner
+#     dir. This is the original, untouched implementation below - fm_is_windows
+#     is false, so Linux/macOS run exactly this code.
+#   - Windows (Git Bash/Cygwin): symlinks are not reliably atomic for
+#     unprivileged users, so an atomic `mkdir` gate with an owner-id file is used
+#     instead (fm_lock_*_win). Selected by fm_is_windows at the two public entry
+#     points (fm_lock_try_acquire / fm_lock_release).
+# Observable acquire/steal/stale-reclaim behavior is identical on both.
+# ==========================================================================
 
 fm_lock_clean_known_files() {
   local lockdir=$1
@@ -203,6 +281,14 @@ fm_lock_try_create() {
 }
 
 fm_lock_remove_path() {
+  # Dispatching entry point, like fm_lock_try_acquire / fm_lock_release: direct
+  # callers such as bin/fm-watch-arm.sh (clear_stale_recorded_watcher_lock) must
+  # remove the Windows lock's `owner` file too, or rmdir fails and the stale lock
+  # persists. POSIX (symlink lock, no owner file) runs the original body below.
+  if fm_is_windows; then
+    fm_lock_remove_path_win "$@"
+    return
+  fi
   local lockdir=$1 ownerdir
   if [ -L "$lockdir" ]; then
     ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
@@ -245,7 +331,216 @@ fm_lock_recheck_stale_owner() {
   return 0
 }
 
+# ---- Windows (Git Bash / Cygwin) lock mechanism ---------------------------
+# Same contract as the POSIX symlink lock above, over an atomic `mkdir` gate: the
+# lock is a real directory (exactly one creator wins the mkdir on NTFS as on a
+# POSIX fs), and ownership of a specific hold is recorded in an `owner` id file
+# plus the holder `pid`. The owner id (pid + two $RANDOM draws) is unique across
+# concurrent acquirers and fresh across recreations, replacing the symlink target
+# the POSIX path uses. None of these run on Linux/macOS (fm_is_windows is false).
+
+fm_lock_new_owner_id() {
+  printf '%s.%s.%s\n' "${BASHPID:-$$}" "${RANDOM}" "${RANDOM}"
+}
+
+fm_lock_clean_known_files_win() {
+  local lockdir=$1
+  rm -f \
+    "$lockdir/pid" \
+    "$lockdir/owner" \
+    "$lockdir/fm-home" \
+    "$lockdir/pid-identity" \
+    "$lockdir/watcher-path" \
+    2>/dev/null || true
+}
+
+fm_lock_read_owner_win() {
+  local lockdir=$1 owner
+  fm_read1 owner "$lockdir/owner" || return 1
+  [ -n "$owner" ] || return 1
+  printf '%s\n' "$owner"
+}
+
+fm_lock_points_to_owner_win() {
+  local lockdir=$1 ownerid=$2 actual
+  fm_read1 actual "$lockdir/owner" || return 1
+  [ "$actual" = "$ownerid" ]
+}
+
+# Populate a lock dir we already own (created via mkdir) with its owner id and our
+# pid. Owner is written first so a concurrent reader that sees a pid also sees the
+# owner; the tiny window where neither is present yet is covered by the empty-pid
+# minimum grace in fm_lock_mid_acquire_is_fresh.
+fm_lock_prepare_owner_win() {
+  local lockdir=$1 ownerid=$2 mypid back
+  mypid=${BASHPID:-$$}
+  printf '%s\n' "$ownerid" > "$lockdir/owner" 2>/dev/null || return 1
+  printf '%s\n' "$mypid" > "$lockdir/pid" 2>/dev/null || return 1
+  fm_read1 back "$lockdir/pid"
+  [ "$back" = "$mypid" ]
+}
+
+fm_lock_remove_path_win() {
+  local lockdir=$1
+  fm_lock_clean_known_files_win "$lockdir"
+  rmdir "$lockdir" 2>/dev/null
+}
+
+fm_lock_claim_blocked_by_steal_win() {
+  local lockdir=$1 allowed_steal_owner=${2:-} steal
+  steal="$lockdir.steal"
+  [ -e "$steal" ] || return 1
+  if [ -n "$allowed_steal_owner" ] && fm_lock_points_to_owner_win "$steal" "$allowed_steal_owner"; then
+    return 1
+  fi
+  return 0
+}
+
+fm_lock_claim_win() {
+  local lockdir=$1 ownerid=$2 allowed_steal_owner=${3:-}
+  # We only hold the lock while it still records our owner id. A losing/late
+  # claimant whose owner no longer matches must not touch the live holder's dir.
+  if ! fm_lock_points_to_owner_win "$lockdir" "$ownerid"; then
+    return 1
+  fi
+  if fm_lock_claim_blocked_by_steal_win "$lockdir" "$allowed_steal_owner"; then
+    # A steal mutex we do not own is active: back off and drop our own hold so the
+    # active stealer can recreate the lock cleanly.
+    if fm_lock_points_to_owner_win "$lockdir" "$ownerid"; then
+      fm_lock_remove_path_win "$lockdir" || true
+    fi
+    return 1
+  fi
+  return 0
+}
+
+fm_lock_try_create_win() {
+  local lockdir=$1 allowed_steal_owner=${2:-} ownerid
+  FM_LOCK_OWNER_DIR=
+  ownerid=$(fm_lock_new_owner_id) || return 1
+  # mkdir is the atomic gate: exactly one creator wins on POSIX and NTFS alike.
+  if ! mkdir "$lockdir" 2>/dev/null; then
+    return 1
+  fi
+  if ! fm_lock_prepare_owner_win "$lockdir" "$ownerid"; then
+    fm_lock_remove_path_win "$lockdir" || true
+    return 1
+  fi
+  if fm_lock_claim_win "$lockdir" "$ownerid" "$allowed_steal_owner"; then
+    FM_LOCK_OWNER_DIR=$ownerid
+    return 0
+  fi
+  # claim failed (blocked by a foreign steal); it removes our hold when we still
+  # owned it. Belt-and-suspenders: clean up if anything is left pointing to us.
+  if fm_lock_points_to_owner_win "$lockdir" "$ownerid"; then
+    fm_lock_remove_path_win "$lockdir" || true
+  fi
+  return 1
+}
+
+fm_lock_recheck_stale_owner_win() {
+  local lockdir=$1 expected_owner=$2 expected_pid=$3 actual_pid
+  if [ -n "$expected_owner" ]; then
+    fm_lock_points_to_owner_win "$lockdir" "$expected_owner" || return 1
+  elif [ -e "$lockdir" ]; then
+    [ -d "$lockdir" ] || return 1
+  fi
+  fm_read1 actual_pid "$lockdir/pid"
+  [ "$actual_pid" = "$expected_pid" ] || return 1
+  if fm_pid_alive "$actual_pid"; then
+    return 1
+  fi
+  if fm_lock_mid_acquire_is_fresh "$lockdir" "$actual_pid"; then
+    return 1
+  fi
+  return 0
+}
+
+fm_lock_try_acquire_win() {
+  local lockdir=$1 pid steal cur rc steal_owner primary_owner
+  FM_LOCK_HELD_PID=
+  FM_LOCK_OWNER_DIR=
+
+  if fm_lock_try_create_win "$lockdir"; then
+    return 0
+  fi
+
+  fm_read1 pid "$lockdir/pid"
+  if fm_pid_alive "$pid"; then
+    FM_LOCK_HELD_PID=$pid
+    return 1
+  fi
+  if fm_lock_mid_acquire_is_fresh "$lockdir" "$pid"; then
+    FM_LOCK_HELD_PID=$pid
+    return 1
+  fi
+
+  steal="$lockdir.steal"
+  if ! fm_lock_try_acquire_win "$steal"; then
+    fm_read1 FM_LOCK_HELD_PID "$lockdir/pid"
+    FM_LOCK_OWNER_DIR=
+    return 1
+  fi
+  steal_owner=${FM_LOCK_OWNER_DIR:-}
+
+  fm_read1 cur "$lockdir/pid"
+  if fm_pid_alive "$cur"; then
+    fm_lock_release_win "$steal"
+    FM_LOCK_HELD_PID=$cur
+    FM_LOCK_OWNER_DIR=
+    return 1
+  fi
+  if fm_lock_mid_acquire_is_fresh "$lockdir" "$cur"; then
+    fm_lock_release_win "$steal"
+    FM_LOCK_HELD_PID=$cur
+    FM_LOCK_OWNER_DIR=
+    return 1
+  fi
+  if ! fm_lock_points_to_owner_win "$steal" "$steal_owner"; then
+    fm_lock_release_win "$steal"
+    fm_read1 FM_LOCK_HELD_PID "$lockdir/pid"
+    FM_LOCK_OWNER_DIR=
+    return 1
+  fi
+
+  primary_owner=$(fm_lock_read_owner_win "$lockdir" 2>/dev/null || true)
+  fm_read1 cur "$lockdir/pid"
+  if ! fm_lock_recheck_stale_owner_win "$lockdir" "$primary_owner" "$cur"; then
+    fm_lock_release_win "$steal"
+    fm_read1 FM_LOCK_HELD_PID "$lockdir/pid"
+    FM_LOCK_OWNER_DIR=
+    return 1
+  fi
+
+  fm_lock_remove_path_win "$lockdir" || true
+  rc=1
+  if fm_lock_try_create_win "$lockdir" "$steal_owner"; then
+    rc=0
+  fi
+  if [ "$rc" -ne 0 ]; then
+    # shellcheck disable=SC2034 # Read by callers after fm_lock_try_acquire returns.
+    fm_read1 FM_LOCK_HELD_PID "$lockdir/pid"
+    FM_LOCK_OWNER_DIR=
+  fi
+  fm_lock_release_win "$steal"
+  return "$rc"
+}
+
+fm_lock_release_win() {
+  local lockdir=$1 pid current
+  current=${BASHPID:-$$}
+  fm_read1 pid "$lockdir/pid"
+  [ "$pid" = "$current" ] || return 0
+  fm_lock_remove_path_win "$lockdir" || true
+}
+
+# ---- Public lock entry points: dispatch to the platform mechanism ---------
+
 fm_lock_try_acquire() {
+  if fm_is_windows; then
+    fm_lock_try_acquire_win "$@"
+    return
+  fi
   local lockdir=$1 pid steal cur rc steal_owner primary_owner
   FM_LOCK_HELD_PID=
   FM_LOCK_OWNER_DIR=
@@ -326,6 +621,10 @@ fm_lock_acquire_wait() {
 }
 
 fm_lock_release() {
+  if fm_is_windows; then
+    fm_lock_release_win "$@"
+    return
+  fi
   local lockdir=$1 pid current ownerdir
   current=${BASHPID:-$$}
   if [ -L "$lockdir" ]; then

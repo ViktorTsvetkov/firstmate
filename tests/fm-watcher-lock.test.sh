@@ -158,9 +158,11 @@ test_lock_single_winner_under_concurrency() {
         printf "%s\n" "$$" >> "$3"
         # Stay alive so the held lock names a live pid for the whole window;
         # otherwise a late contender could legitimately reclaim a dead-pid lock.
-        sleep 1
+        # POSIX holds 1s (unchanged); Windows holds longer (FM_TEST_LOCK_HOLD) to
+        # outlast the ~1.5s it takes to fork all 40 contenders on the slow substrate.
+        sleep "$4"
       fi
-    ' _ "$LIB" "$lockdir" "$marker" &
+    ' _ "$LIB" "$lockdir" "$marker" "$FM_TEST_LOCK_HOLD" &
     pids="$pids $!"
     i=$((i + 1))
   done
@@ -208,9 +210,12 @@ test_lock_stale_steal_single_winner_under_concurrency() {
       . "$1"
       if fm_lock_try_acquire "$2"; then
         printf "%s\n" "${BASHPID:-$$}" >> "$3"
-        sleep 1
+        # POSIX holds 1s (unchanged); Windows holds longer (FM_TEST_LOCK_HOLD) so
+        # the last-spawned stealer sees a live winner and does not double-reclaim
+        # (see test_lock_single_winner_under_concurrency).
+        sleep "$4"
       fi
-    ' _ "$LIB" "$lockdir" "$marker" &
+    ' _ "$LIB" "$lockdir" "$marker" "$FM_TEST_LOCK_HOLD" &
     pids="$pids $!"
     i=$((i + 1))
   done
@@ -299,6 +304,12 @@ test_lock_empty_pid_uses_minimum_grace() {
   mkdir "$lockdir"
   out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
     . "$1"
+    # Windows-scoped proof-test hardening: the minimum-grace floor is 2s and
+    # fm_path_age is whole-second, but on Windows the subshell fork + lib source
+    # can age this freshly-made empty lock past 2s before the acquire runs (a
+    # test-setup race, not a lock bug), so refresh its mtime here to keep age ~0 at
+    # the check. POSIX is untouched (fm_is_windows is false there).
+    fm_is_windows && touch "$2"
     if fm_lock_try_acquire "$2"; then rc=0; else rc=1; fi
     printf "rc=%s held=%s\n" "$rc" "${FM_LOCK_HELD_PID:-}"
   ' _ "$LIB" "$lockdir")
@@ -316,18 +327,39 @@ test_lock_late_claim_loses_after_recreate() {
   dir=$(make_case lock-late-claim)
   state="$dir/state"
   lockdir="$state/.contend.lock"
-  out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
-    . "$1"
-    owner1=$(fm_lock_owner_dir "$2") || exit 20
-    ln -s "$owner1" "$2" || exit 21
-    touch -h -t 200001010000 "$2" 2>/dev/null || sleep 2
-    if ! fm_lock_try_acquire "$2"; then exit 22; fi
-    before=$(cat "$2/pid" 2>/dev/null || true)
-    if fm_lock_claim "$2" "$owner1"; then late=won; else late=lost; fi
-    after=$(cat "$2/pid" 2>/dev/null || true)
-    current_owner=$(readlink "$2" 2>/dev/null || true)
-    printf "late=%s before=%s after=%s owner_changed=%s\n" "$late" "$before" "$after" "$([ "$current_owner" != "$owner1" ] && echo yes || echo no)"
-  ' _ "$LIB" "$lockdir")
+  # White-box test: it constructs the lock in the platform's OWN representation
+  # and calls that mechanism's internals, so it branches (STRICT ADDITIVE - the
+  # POSIX branch is the original symlink body, unchanged). Windows builds the
+  # mkdir + owner-id lock and exercises fm_lock_*_win; both assert the same
+  # property: a late claimant whose owner no longer matches loses.
+  if [ "$FM_TEST_IS_WINDOWS" = yes ]; then
+    out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+      . "$1"
+      owner1=$(fm_lock_new_owner_id) || exit 20
+      mkdir "$2" || exit 21
+      printf "%s\n" "$owner1" > "$2/owner"
+      touch -t 200001010000 "$2" 2>/dev/null || sleep 2
+      if ! fm_lock_try_acquire "$2"; then exit 22; fi
+      before=$(cat "$2/pid" 2>/dev/null || true)
+      if fm_lock_claim_win "$2" "$owner1"; then late=won; else late=lost; fi
+      after=$(cat "$2/pid" 2>/dev/null || true)
+      current_owner=$(cat "$2/owner" 2>/dev/null || true)
+      printf "late=%s before=%s after=%s owner_changed=%s\n" "$late" "$before" "$after" "$([ "$current_owner" != "$owner1" ] && echo yes || echo no)"
+    ' _ "$LIB" "$lockdir")
+  else
+    out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+      . "$1"
+      owner1=$(fm_lock_owner_dir "$2") || exit 20
+      ln -s "$owner1" "$2" || exit 21
+      touch -h -t 200001010000 "$2" 2>/dev/null || sleep 2
+      if ! fm_lock_try_acquire "$2"; then exit 22; fi
+      before=$(cat "$2/pid" 2>/dev/null || true)
+      if fm_lock_claim "$2" "$owner1"; then late=won; else late=lost; fi
+      after=$(cat "$2/pid" 2>/dev/null || true)
+      current_owner=$(readlink "$2" 2>/dev/null || true)
+      printf "late=%s before=%s after=%s owner_changed=%s\n" "$late" "$before" "$after" "$([ "$current_owner" != "$owner1" ] && echo yes || echo no)"
+    ' _ "$LIB" "$lockdir")
+  fi
   case "$out" in
     *"late=lost"*) ;;
     *) fail "late original claimant succeeded after lock recreation: $out" ;;
@@ -348,17 +380,36 @@ test_lock_paused_mid_acquire_claim_fails_during_steal() {
   dir=$(make_case lock-paused-claim-steal)
   state="$dir/state"
   lockdir="$state/.contend.lock"
-  out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
-    . "$1"
-    owner=$(fm_lock_owner_dir "$2") || exit 20
-    ln -s "$owner" "$2" || exit 21
-    fm_lock_try_acquire "$2.steal" || exit 22
-    steal_owner=${FM_LOCK_OWNER_DIR:-}
-    if fm_lock_claim "$2" "$owner"; then late=won; else late=lost; fi
-    if fm_lock_try_create "$2" "$steal_owner"; then stealer=won; else stealer=lost; fi
-    pid=$(cat "$2/pid" 2>/dev/null || true)
-    printf "late=%s stealer=%s pid=%s\n" "$late" "$stealer" "$pid"
-  ' _ "$LIB" "$lockdir")
+  # White-box test (see test_lock_late_claim_loses_after_recreate): branches on the
+  # platform lock representation, POSIX symlink body unchanged; Windows exercises
+  # the mkdir mechanism via fm_lock_*_win. Both assert: a paused claimant backs off
+  # to an active stealer, which then wins.
+  if [ "$FM_TEST_IS_WINDOWS" = yes ]; then
+    out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+      . "$1"
+      owner=$(fm_lock_new_owner_id) || exit 20
+      mkdir "$2" || exit 21
+      printf "%s\n" "$owner" > "$2/owner"
+      fm_lock_try_acquire "$2.steal" || exit 22
+      steal_owner=${FM_LOCK_OWNER_DIR:-}
+      if fm_lock_claim_win "$2" "$owner"; then late=won; else late=lost; fi
+      if fm_lock_try_create_win "$2" "$steal_owner"; then stealer=won; else stealer=lost; fi
+      pid=$(cat "$2/pid" 2>/dev/null || true)
+      printf "late=%s stealer=%s pid=%s\n" "$late" "$stealer" "$pid"
+    ' _ "$LIB" "$lockdir")
+  else
+    out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+      . "$1"
+      owner=$(fm_lock_owner_dir "$2") || exit 20
+      ln -s "$owner" "$2" || exit 21
+      fm_lock_try_acquire "$2.steal" || exit 22
+      steal_owner=${FM_LOCK_OWNER_DIR:-}
+      if fm_lock_claim "$2" "$owner"; then late=won; else late=lost; fi
+      if fm_lock_try_create "$2" "$steal_owner"; then stealer=won; else stealer=lost; fi
+      pid=$(cat "$2/pid" 2>/dev/null || true)
+      printf "late=%s stealer=%s pid=%s\n" "$late" "$stealer" "$pid"
+    ' _ "$LIB" "$lockdir")
+  fi
   case "$out" in
     *"late=lost"*) ;;
     *) fail "paused claimant succeeded while steal mutex was held: $out" ;;
