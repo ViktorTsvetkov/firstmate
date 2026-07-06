@@ -749,6 +749,14 @@ run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> 
 }
 
 test_spawn_conformance_old_vs_new() {
+  # WINDOWS-DEFER: the Windows port deliberately routes the task temp root through
+  # TMPDIR (fm_platform_temp_root honors TMPDIR on Windows), so the spawn's GOTMPDIR
+  # is intentionally NOT byte-identical to the pre-port /tmp build there. This is a
+  # POSIX strict-additivity conformance check; it self-skips on native Windows,
+  # mirroring the orca suite's WINDOWS-DEFER skip. ubuntu CI (POSIX) is authoritative.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) echo "skip: WINDOWS-DEFER fm-spawn conformance - Windows routes GOTMPDIR through TMPDIR by design (POSIX-only strict-additivity check)"; return 0 ;;
+  esac
   local old_bin fb proj wt data id log_old log_new out_old out_new
   local state_old state_new config_old config_new
   old_bin=$(build_old_bin spawn-old)
@@ -784,7 +792,7 @@ test_spawn_conformance_old_vs_new() {
   assert_contains "$(cat "$log_new")" $'\x1f''-l'$'\x1f'"CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions \"\$(cat '$data/$id/brief.md')\"" \
     "spawn tmux log missing the literal launch-command send"
 
-  rm -rf "${TMPDIR:-/tmp}/fm-$id"
+  rm -rf "$(fm_platform_temp_root)/fm-$id"
   pass "fm-spawn.sh: tmux command log and printed summary line are byte-identical old vs new for a ship-task claude spawn"
 }
 
@@ -910,7 +918,7 @@ test_spawn_default_backend_writes_no_meta_field() {
   expect_code 0 $? "explicit --backend tmux should spawn successfully"$'\n'"$out"
   assert_no_grep 'backend=' "$state/$id.meta" \
     "an explicit --backend tmux (the default) must not write backend= to meta (P1 compatibility contract)"
-  rm -rf "${TMPDIR:-/tmp}/fm-$id"
+  rm -rf "$(fm_platform_temp_root)/fm-$id"
   pass "fm-spawn.sh: an explicit --backend tmux resolves silently and writes no backend= (missing means tmux)"
 }
 
@@ -934,7 +942,7 @@ test_spawn_explicit_backend_flag_beats_autodetect_herdr_env() {
   expect_code 0 $? "explicit --backend tmux should spawn successfully even with HERDR_ENV=1 set"$'\n'"$out"
   assert_no_grep 'backend=' "$state/$id.meta" \
     "an explicit --backend tmux must win over an ambient HERDR_ENV=1 auto-detect marker"
-  rm -rf "${TMPDIR:-/tmp}/fm-$id"
+  rm -rf "$(fm_platform_temp_root)/fm-$id"
   pass "fm-spawn.sh: explicit --backend tmux wins over an ambient HERDR_ENV=1 auto-detect marker"
 }
 
@@ -964,7 +972,7 @@ test_spawn_autodetect_nesting_resolves_tmux_silently() {
   case "$out" in
     *NOTICE*) fail "auto-detecting tmux (even nested inside herdr) must stay silent, no NOTICE expected"$'\n'"$out" ;;
   esac
-  rm -rf "${TMPDIR:-/tmp}/fm-$id"
+  rm -rf "$(fm_platform_temp_root)/fm-$id"
   pass "fm-spawn.sh: auto-detect resolves nested tmux-in-herdr to tmux and stays silent end to end"
 }
 
