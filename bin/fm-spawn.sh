@@ -1000,7 +1000,11 @@ fi
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
 sq_gotmpdir=$(shell_quote "$TASK_TMP/gotmp")
-spawn_send_text_line "$T" "export GOTMPDIR=$sq_gotmpdir"
+gotmp_export="$TASK_TMP/gotmp"
+if fm_platform_is_windows && [ "$BACKEND" != tmux ]; then
+  gotmp_export="$sq_gotmpdir"
+fi
+spawn_send_text_line "$T" "export GOTMPDIR=$gotmp_export"
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3
