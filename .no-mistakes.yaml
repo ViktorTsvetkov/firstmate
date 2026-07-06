@@ -3,10 +3,41 @@
 # Run the firstmate bash behavior suite deterministically as the test-step
 # baseline, instead of delegating to an agent (an agent-driven test step has
 # crashed the daemon). Mirrors .github/workflows/ci.yml: iterate every
-# tests/*.test.sh, run each, and fail the step if any one exits non-zero. The
-# e2e tests need tmux on PATH, which the firstmate environment provides.
+# tests/*.test.sh, run each, and fail the step if any one exits non-zero.
+# The POSIX path keeps the original tmux preflight exactly, so Linux/macOS gate
+# behavior stays byte-for-byte unchanged.
+# The Windows batch path has no hard tmux preflight: tests that genuinely need
+# tmux self-skip when it is absent, so the native-Windows local gate can run on a
+# tmux-less box while ubuntu CI keeps full e2e coverage.
 commands:
-  test: 'command -v tmux >/dev/null || { echo "tmux is required for e2e tests" >&2; exit 1; }; tmux -V; rc=0; for t in tests/*.test.sh; do echo "== $t =="; bash "$t" || rc=1; done; exit "$rc"'
+  # Cross-shell dispatch (STRICT ADDITIVE). no-mistakes runs `commands.test` via
+  # `sh` on Linux/macOS but via `cmd` / a temp `.bat` on Windows, where the POSIX
+  # one-liner errors ('rc' is not recognized) and PATH `bash` may be WSL (which
+  # cannot resolve a Windows worktree's .git). So this value is a batch/sh
+  # polyglot:
+  #   - POSIX: the leading `:` is a no-op (`true`), so the exact original one-liner
+  #     runs UNCHANGED. ubuntu CI exercises this path and is the enforcement.
+  #   - Windows: `cmd` reads the `:` lines as labels and runs the batch section,
+  #     which pins Git Bash deterministically off `git`'s OWN install location
+  #     (iterate `where git`, pick the copy whose `..\bin\bash.exe` exists - never
+  #     PATH/WSL bash) and runs the same suite on the LF-normalized scripts.
+  # The batch section is hidden from `sh` inside a quoted here-doc, so `sh` never
+  # parses it. Git-Bash-pinning approach cited in the PR body.
+  test: |
+    :; command -v tmux >/dev/null || { echo "tmux is required for e2e tests" >&2; exit 1; }; tmux -V; rc=0; for t in tests/*.test.sh; do echo "== $t =="; bash "$t" || rc=1; done; exit "$rc"
+    :<<'NMWINBATCH'
+    @echo off
+    setlocal
+    rem Clear MSYS_NO_PATHCONV so Git Bash converts POSIX paths (e.g. `git -C
+    rem /c/...`) to Windows paths for native tools; a stray inherited value would
+    rem break git/treehouse calls inside the suite.
+    set "MSYS_NO_PATHCONV="
+    set "NMBASH="
+    for /f "delims=" %%G in ('where git') do if exist "%%~dpG..\bin\bash.exe" set "NMBASH=%%~dpG..\bin\bash.exe"
+    if not defined NMBASH (echo no-mistakes: could not locate Git Bash from git.exe>&2 & exit /b 1)
+    "%NMBASH%" -c "rc=0; for t in tests/*.test.sh; do echo == $t ==; bash $t || rc=1; done; exit $rc"
+    exit /b %ERRORLEVEL%
+    NMWINBATCH
 
 # Keep test evidence out of this repo; it stays in a temp dir instead.
 test:

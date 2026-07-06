@@ -1,0 +1,7 @@
+# Shell scripts must check out as LF so Git Bash runs them on Windows. Git's
+# autocrlf otherwise checks them out CRLF, and a carriage return breaks bash
+# (`set -u\r`, function syntax, here-doc delimiters) - exactly what makes the
+# native-Windows local gate fail. POSIX no-op: these files are already LF in git
+# and on Linux/macOS checkouts; the attribute only pins the Windows checkout to
+# LF as well, so it changes nothing on the POSIX path ubuntu CI exercises.
+*.sh text eol=lf
