@@ -25,7 +25,11 @@ fm_platform_is_macos() {
 }
 
 fm_platform_temp_root() {
-  printf '%s\n' "${TMPDIR:-/tmp}"
+  if fm_platform_is_windows; then
+    printf '%s\n' "${TMPDIR:-/tmp}"
+  else
+    printf '%s\n' /tmp
+  fi
 }
 
 fm_platform_userprofile_to_posix() {

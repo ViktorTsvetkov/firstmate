@@ -48,13 +48,23 @@ test_windows_userprofile_home_fallback() {
   pass "fm-platform-lib falls back from HOME to USERPROFILE on Windows"
 }
 
-test_temp_root_honors_tmpdir() {
+test_temp_root_windows_honors_tmpdir() {
   local out
-  out=$(TMPDIR="$TMP_ROOT/custom-tmp" bash -c '. "$1"; fm_platform_temp_root' _ "$LIB")
-  [ "$out" = "$TMP_ROOT/custom-tmp" ] || fail "temp root ignored TMPDIR (got '$out')"
-  pass "fm-platform-lib temp root honors TMPDIR with /tmp fallback isolated in one helper"
+  # shellcheck disable=SC2016  # single quotes are deliberate: $1 expands inside bash -c.
+  out=$(env TMPDIR="$TMP_ROOT/custom-tmp" FM_PLATFORM_IS_WINDOWS=yes bash -c '. "$1"; fm_platform_temp_root' _ "$LIB")
+  [ "$out" = "$TMP_ROOT/custom-tmp" ] || fail "Windows temp root should honor TMPDIR (got '$out')"
+  pass "fm-platform-lib temp root honors TMPDIR on Windows"
+}
+
+test_temp_root_posix_is_tmp() {
+  local out
+  # shellcheck disable=SC2016  # single quotes are deliberate: $1 expands inside bash -c.
+  out=$(env TMPDIR="$TMP_ROOT/custom-tmp" FM_PLATFORM_IS_WINDOWS=no bash -c '. "$1"; fm_platform_temp_root' _ "$LIB")
+  [ "$out" = /tmp ] || fail "POSIX temp root should stay /tmp regardless of TMPDIR (got '$out')"
+  pass "fm-platform-lib temp root stays /tmp on POSIX regardless of TMPDIR"
 }
 
 test_msys_fixed_ps_fields
 test_windows_userprofile_home_fallback
-test_temp_root_honors_tmpdir
+test_temp_root_windows_honors_tmpdir
+test_temp_root_posix_is_tmp
