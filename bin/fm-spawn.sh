@@ -1001,7 +1001,7 @@ fi
 # the env is set when the agent starts; the brief sleep lets the export land.
 sq_gotmpdir=$(shell_quote "$TASK_TMP/gotmp")
 gotmp_export="$TASK_TMP/gotmp"
-if fm_platform_is_windows && [ "$BACKEND" != tmux ]; then
+if [ "$BACKEND" != tmux ]; then
   gotmp_export="$sq_gotmpdir"
 fi
 spawn_send_text_line "$T" "export GOTMPDIR=$gotmp_export"

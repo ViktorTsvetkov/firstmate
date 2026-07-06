@@ -480,16 +480,26 @@ test_backend_source_shell_portable() {
 }
 
 test_backend_validate_spawn_accepts_orca() {
-  local out
+  local out saved_windows=${FM_PLATFORM_IS_WINDOWS:-} saved_uname=${FM_PLATFORM_UNAME:-}
+  FM_PLATFORM_IS_WINDOWS=no
+  FM_PLATFORM_UNAME=Linux
   fm_backend_validate_spawn tmux 2>/dev/null || fail "fm_backend_validate_spawn should accept tmux"
   fm_backend_validate_spawn herdr 2>/dev/null || fail "fm_backend_validate_spawn should accept herdr"
   fm_backend_validate_spawn zellij 2>/dev/null || fail "fm_backend_validate_spawn should accept zellij"
   fm_backend_validate_spawn orca 2>/dev/null || fail "fm_backend_validate_spawn should accept orca"
+  out=$(fm_backend_validate_spawn cmux 2>&1) && fail "fm_backend_validate_spawn should refuse unsupported Linux backends"
+  assert_contains "$out" "not supported on this platform" "fm_backend_validate_spawn did not enforce platform declarations"
+  FM_PLATFORM_IS_WINDOWS=yes
+  out=$(fm_backend_validate_spawn tmux 2>&1) && fail "fm_backend_validate_spawn should refuse tmux on Windows"
+  assert_contains "$out" "supported-platforms: posix" "fm_backend_validate_spawn did not name the supported platforms"
+  fm_backend_validate_spawn orca 2>/dev/null || fail "fm_backend_validate_spawn should accept orca on Windows"
+  FM_PLATFORM_IS_WINDOWS=$saved_windows
+  FM_PLATFORM_UNAME=$saved_uname
   out=$(fm_backend_validate_spawn bogus 2>&1) && fail "fm_backend_validate_spawn should still refuse unknown backends"
   assert_contains "$out" "unknown backend 'bogus'" "fm_backend_validate_spawn did not preserve unknown-backend validation"
   out=$(fm_backend_validate_spawn "tmux herdr" 2>&1) && fail "fm_backend_validate_spawn should refuse a multi-token backend name"
   assert_contains "$out" "unknown backend 'tmux herdr'" "fm_backend_validate_spawn accepted a multi-token backend name"
-  pass "fm_backend_validate_spawn: all implemented lifecycle backends are spawn-supported"
+  pass "fm_backend_validate_spawn: spawn support is gated by platform declarations"
 }
 
 test_backend_platform_declarations_report_windows_support() {
@@ -759,6 +769,7 @@ run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> 
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" \
     FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" FM_TMUX_LOG="$log" \
+    FM_PLATFORM_IS_WINDOWS=no FM_PLATFORM_UNAME=Linux \
     "$bin/bin/fm-spawn.sh" "$@"
 }
 
@@ -919,6 +930,7 @@ test_spawn_default_backend_writes_no_meta_field() {
   out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
+    FM_PLATFORM_IS_WINDOWS=no FM_PLATFORM_UNAME=Linux \
     FM_TMUX_LOG="$TMP_ROOT/nobackend.log" \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --backend tmux 2>&1)
   expect_code 0 $? "explicit --backend tmux should spawn successfully"$'\n'"$out"
@@ -943,6 +955,7 @@ test_spawn_explicit_backend_flag_beats_autodetect_herdr_env() {
   out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" HERDR_ENV=1 \
+    FM_PLATFORM_IS_WINDOWS=no FM_PLATFORM_UNAME=Linux \
     FM_TMUX_LOG="$TMP_ROOT/explicit-backend.log" \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --backend tmux 2>&1)
   expect_code 0 $? "explicit --backend tmux should spawn successfully even with HERDR_ENV=1 set"$'\n'"$out"
@@ -970,6 +983,7 @@ test_spawn_autodetect_nesting_resolves_tmux_silently() {
   out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" HERDR_ENV=1 \
+    FM_PLATFORM_IS_WINDOWS=no FM_PLATFORM_UNAME=Linux \
     FM_TMUX_LOG="$TMP_ROOT/nest.log" \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude 2>&1)
   expect_code 0 $? "fm-spawn.sh should auto-detect tmux and spawn successfully for nested tmux-in-herdr"$'\n'"$out"

@@ -323,6 +323,10 @@ fm_backend_validate() {  # <name>
 fm_backend_validate_spawn() {  # <name>
   local name=$1
   fm_backend_validate "$name" || return 1
+  if ! fm_backend_platform_supported "$name"; then
+    echo "error: backend '$name' is not supported on this platform (supported-platforms: $(fm_backend_platforms "$name"))" >&2
+    return 1
+  fi
   fm_backend_list_contains "$FM_BACKEND_SPAWN" "$name" && return 0
   echo "error: backend '$name' does not support task spawning yet (spawn-supported: $FM_BACKEND_SPAWN)" >&2
   return 1
