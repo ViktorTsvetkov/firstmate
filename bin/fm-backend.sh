@@ -95,12 +95,9 @@ fm_backend_platform_supported() {  # <name>
   platforms=$(fm_backend_platforms "$1") || return 1
   if fm_platform_is_windows; then
     fm_backend_list_contains "$platforms" windows
-    return
-  fi
-  if fm_platform_is_macos && fm_backend_list_contains "$platforms" macos; then
+  else
     return 0
   fi
-  fm_backend_list_contains "$platforms" posix
 }
 
 # fm_backend_list_contains: whitespace-delimited membership without relying on
@@ -323,10 +320,6 @@ fm_backend_validate() {  # <name>
 fm_backend_validate_spawn() {  # <name>
   local name=$1
   fm_backend_validate "$name" || return 1
-  if ! fm_backend_platform_supported "$name"; then
-    echo "error: backend '$name' is not supported on this platform (supported-platforms: $(fm_backend_platforms "$name"))" >&2
-    return 1
-  fi
   fm_backend_list_contains "$FM_BACKEND_SPAWN" "$name" && return 0
   echo "error: backend '$name' does not support task spawning yet (spawn-supported: $FM_BACKEND_SPAWN)" >&2
   return 1
