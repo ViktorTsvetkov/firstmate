@@ -4,10 +4,11 @@
 # baseline, instead of delegating to an agent (an agent-driven test step has
 # crashed the daemon). Mirrors .github/workflows/ci.yml: iterate every
 # tests/*.test.sh, run each, and fail the step if any one exits non-zero.
-# No hard tmux gate: the tests that genuinely need tmux self-skip when it is
-# absent (`command -v tmux ... || { echo "skip: tmux not found"; exit 0; }`), so
-# this gate runs green on a tmux-less box (e.g. native Windows) while GitHub CI on
-# ubuntu-latest, where tmux is present, keeps full e2e coverage.
+# The POSIX path keeps the original tmux preflight exactly, so Linux/macOS gate
+# behavior stays byte-for-byte unchanged.
+# The Windows batch path has no hard tmux preflight: tests that genuinely need
+# tmux self-skip when it is absent, so the native-Windows local gate can run on a
+# tmux-less box while ubuntu CI keeps full e2e coverage.
 commands:
   # Cross-shell dispatch (STRICT ADDITIVE). no-mistakes runs `commands.test` via
   # `sh` on Linux/macOS but via `cmd` / a temp `.bat` on Windows, where the POSIX

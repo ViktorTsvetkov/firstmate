@@ -64,7 +64,9 @@ Selecting any other supervisor backend, including `zellij`, `orca`, or `cmux`, r
 
 The tracked `.no-mistakes.yaml` keeps test evidence outside the repo and defines `commands.test` so no-mistakes runs firstmate's bash behavior suite directly.
 That evidence policy is specific to the firstmate repo: target projects may legitimately commit `.no-mistakes/evidence/` from their own no-mistakes pipeline, but firstmate keeps `.no-mistakes/` local and CI rejects tracked entries under that path.
-That command requires `tmux` on `PATH`, prints `tmux -V`, runs every `tests/*.test.sh` with `bash`, and fails if any script exits non-zero.
+On Linux/macOS the command keeps the original shell path: require `tmux` on `PATH`, print `tmux -V`, run every `tests/*.test.sh` with `bash`, and fail if any script exits non-zero.
+On native Windows no-mistakes runs the same YAML value through `cmd`, so the command's batch half locates Git Bash from `git.exe`'s own install directory, clears `MSYS_NO_PATHCONV`, and runs the bash suite from there.
+That Windows path has no hard tmux preflight; tests that need tmux or another unavailable backend self-skip, and deliberately deferred Windows substrate gaps are marked in tests with `WINDOWS-DEFER`.
 It intentionally mirrors the behavior-test baseline in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) instead of delegating the test step to an agent.
 
 ## Captain preferences (data/captain.md)
