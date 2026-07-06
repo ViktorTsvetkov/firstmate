@@ -35,7 +35,7 @@ commands:
     set "NMBASH="
     for /f "delims=" %%G in ('where git') do if exist "%%~dpG..\bin\bash.exe" set "NMBASH=%%~dpG..\bin\bash.exe"
     if not defined NMBASH (echo no-mistakes: could not locate Git Bash from git.exe>&2 & exit /b 1)
-    "%NMBASH%" -c "rc=0; for t in tests/*.test.sh; do echo == $t ==; bash $t || rc=1; done; exit $rc"
+    "%NMBASH%" -lc ". ./bin/fm-platform-lib.sh; if fm_platform_is_windows; then ./bin/fm-test-runner-windows.sh; else rc=0; for t in tests/*.test.sh; do echo \"== $t ==\"; bash \"$t\" || rc=1; done; exit \"$rc\"; fi"
     exit /b %ERRORLEVEL%
     NMWINBATCH
 
