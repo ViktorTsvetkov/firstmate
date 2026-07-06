@@ -10,11 +10,16 @@
 # being installed and reachable.
 set -u
 
-# WINDOWS-DEFER: capture trims wrong under CRLF line endings on Windows; deferred to winport Phase 0 (CRLF/.gitattributes). STRICT ADDITIVE - Linux/macOS still
-# run this test in full (ubuntu CI is the authoritative gate); it self-skips only on
+# WINDOWS-DEFER: cmux capture comparison sees a stray CR because jq's Windows
+# build emits CRLF (`jq -r '"a\nb"'` -> "a\r\nb\r\n"), so the locally-trimmed
+# screen text carries \r. This is a jq/tool-output issue, NOT the script line
+# endings the repo .gitattributes pins to LF - re-tested on LF and it still
+# fails - so it stays deferred to winport Phase 0 (jq/tool-output CRLF, e.g. strip
+# \r after jq in bin/backends/cmux.sh). STRICT ADDITIVE - Linux/macOS still run
+# this test in full (ubuntu CI is the authoritative gate); it self-skips only on
 # native Windows, where this pre-existing substrate failure is not this PR's job.
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) echo "skip: WINDOWS-DEFER fm-backend-cmux - capture trims wrong under CRLF line endings on Windows (winport Phase 0 (CRLF/.gitattributes))"; exit 0 ;;
+  MINGW*|MSYS*|CYGWIN*) echo "skip: WINDOWS-DEFER fm-backend-cmux - jq Windows build emits CRLF in capture (winport Phase 0, jq/tool-output CRLF)"; exit 0 ;;
 esac
 
 # shellcheck source=tests/lib.sh
