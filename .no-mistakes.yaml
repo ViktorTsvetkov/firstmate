@@ -27,6 +27,10 @@ commands:
     :<<'NMWINBATCH'
     @echo off
     setlocal
+    rem Clear MSYS_NO_PATHCONV so Git Bash converts POSIX paths (e.g. `git -C
+    rem /c/...`) to Windows paths for native tools; a stray inherited value would
+    rem break git/treehouse calls inside the suite.
+    set "MSYS_NO_PATHCONV="
     set "NMBASH="
     for /f "delims=" %%G in ('where git') do if exist "%%~dpG..\bin\bash.exe" set "NMBASH=%%~dpG..\bin\bash.exe"
     if not defined NMBASH (echo no-mistakes: could not locate Git Bash from git.exe>&2 & exit /b 1)
