@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -u
+
+# shellcheck disable=SC1091
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+TMP_ROOT=$(fm_test_tmproot fm-platform-lib)
+LIB="$ROOT/bin/fm-platform-lib.sh"
+
+test_msys_fixed_ps_fields() {
+  local dir fakebin out
+  dir="$TMP_ROOT/msys-ps"
+  fakebin=$(fm_fakebin "$dir")
+cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *" -o "*) exit 1 ;;
+  *"-p 4321"*)
+    printf '      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND\n'
+    printf '     4321    1234    4321      98765  pty0      197609 12:34:56 /usr/bin/bash\n'
+    ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+
+  out=$(PATH="$fakebin:$PATH" bash -c '. "$1"; fm_platform_ps_field 4321 ppid' _ "$LIB")
+  [ "$out" = 1234 ] || fail "fixed-column ps ppid parse returned '$out'"
+
+  out=$(PATH="$fakebin:$PATH" bash -c '. "$1"; fm_platform_ps_field 4321 comm' _ "$LIB")
+  [ "$out" = /usr/bin/bash ] || fail "fixed-column ps command parse returned '$out'"
+
+  out=$(PATH="$fakebin:$PATH" bash -c '. "$1"; fm_platform_pid_identity 4321' _ "$LIB")
+  [ "$out" = "12:34:56 /usr/bin/bash" ] || fail "fixed-column ps identity returned '$out'"
+
+  pass "fm-platform-lib parses MSYS fixed-column ps output for ppid, command, and identity"
+}
+
+test_windows_userprofile_home_fallback() {
+  local out
+  # shellcheck disable=SC2016  # single quotes are deliberate: $1 expands inside bash -c.
+  out=$(env HOME='' USERPROFILE='C:\Users\Captain' FM_PLATFORM_IS_WINDOWS=yes bash -c '. "$1"; fm_platform_home_dir' _ "$LIB")
+  case "$out" in
+    /c/Users/Captain|/cygdrive/c/Users/Captain) ;;
+    *) fail "USERPROFILE fallback did not produce a POSIX-ish Windows home path: '$out'" ;;
+  esac
+  pass "fm-platform-lib falls back from HOME to USERPROFILE on Windows"
+}
+
+test_temp_root_windows_honors_tmpdir() {
+  local out
+  # shellcheck disable=SC2016  # single quotes are deliberate: $1 expands inside bash -c.
+  out=$(env TMPDIR="$TMP_ROOT/custom-tmp" FM_PLATFORM_IS_WINDOWS=yes bash -c '. "$1"; fm_platform_temp_root' _ "$LIB")
+  [ "$out" = "$TMP_ROOT/custom-tmp" ] || fail "Windows temp root should honor TMPDIR (got '$out')"
+  pass "fm-platform-lib temp root honors TMPDIR on Windows"
+}
+
+test_temp_root_posix_is_tmp() {
+  local out
+  # shellcheck disable=SC2016  # single quotes are deliberate: $1 expands inside bash -c.
+  out=$(env TMPDIR="$TMP_ROOT/custom-tmp" FM_PLATFORM_IS_WINDOWS=no bash -c '. "$1"; fm_platform_temp_root' _ "$LIB")
+  [ "$out" = /tmp ] || fail "POSIX temp root should stay /tmp regardless of TMPDIR (got '$out')"
+  pass "fm-platform-lib temp root stays /tmp on POSIX regardless of TMPDIR"
+}
+
+test_msys_fixed_ps_fields
+test_windows_userprofile_home_fallback
+test_temp_root_windows_honors_tmpdir
+test_temp_root_posix_is_tmp

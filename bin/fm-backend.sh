@@ -53,6 +53,8 @@ FM_BACKEND_DEFAULT_ROOT="$(cd "$FM_BACKEND_LIB_DIR/.." && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_BACKEND_DEFAULT_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+# shellcheck source=bin/fm-platform-lib.sh
+. "$FM_BACKEND_LIB_DIR/fm-platform-lib.sh"
 
 # Verified backend adapters. Extend only after a backend gets its own
 # bin/backends/<name>.sh and empirical verification, mirroring AGENTS.md
@@ -68,6 +70,38 @@ FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # codex-app remains deliberately absent; see docs/codex-app-backend.md.
 FM_BACKEND_KNOWN="tmux herdr zellij orca cmux"
 FM_BACKEND_SPAWN="tmux herdr zellij orca cmux"
+
+fm_backend_platforms() {  # <name>
+  case "$1" in
+    tmux) printf 'posix' ;;
+    herdr) printf 'posix windows' ;;
+    zellij) printf 'posix' ;;
+    orca) printf 'posix windows' ;;
+    cmux) printf 'macos' ;;
+    *) return 1 ;;
+  esac
+}
+
+fm_backend_capabilities() {  # <name>
+  case "$1" in
+    tmux) printf 'spawn send-key:Escape composer-state' ;;
+    herdr) printf 'spawn send-key:Escape composer-state native-busy secondmate afk-daemon autodetect windows-preview' ;;
+    zellij) printf 'spawn send-key:Escape' ;;
+    orca) printf 'spawn owns-worktree composer-state windows-native' ;;
+    cmux) printf 'spawn send-key:Escape composer-state autodetect macos-app' ;;
+    *) return 1 ;;
+  esac
+}
+
+fm_backend_platform_supported() {  # <name>
+  local platforms
+  platforms=$(fm_backend_platforms "$1") || return 1
+  if fm_platform_is_windows; then
+    fm_backend_list_contains "$platforms" windows
+  else
+    return 0
+  fi
+}
 
 # fm_backend_list_contains: whitespace-delimited membership without relying on
 # shell word splitting. fm-backend.sh is normally sourced by bash scripts, but
@@ -171,7 +205,7 @@ fm_backend_detect() {
 # bundle-id or ancestry on success. Cheap-first: the bundle-id check is a pure
 # env read; the ancestry walk (subprocess-per-hop) runs only when it misses.
 fm_backend_detect_cmux_fallback() {
-  [ "$(uname 2>/dev/null)" = Darwin ] || return 1
+  fm_platform_is_macos || return 1
   if [ "${__CFBundleIdentifier:-}" = "$FM_BACKEND_CMUX_BUNDLE_ID" ]; then
     FM_BACKEND_DETECT_SIGNAL=bundle-id
     return 0
@@ -211,14 +245,14 @@ fm_backend_detect_cmux_app_is_ancestor() {
     if [ -n "$cmux_pid" ] && [ "$pid" = "$cmux_pid" ]; then
       return 0
     fi
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || comm=""
+    comm=$(fm_platform_ps_field "$pid" comm) || comm=""
     comm="${comm#"${comm%%[![:space:]]*}"}"
     comm="${comm%"${comm##*[![:space:]]}"}"
     [ -n "$comm" ] || return 1
     case "$comm" in
       */cmux.app/Contents/MacOS/cmux) return 0 ;;
     esac
-    ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+    ppid=$(fm_platform_ps_field "$pid" ppid || true)
     case "$ppid" in ''|*[!0-9]*) return 1 ;; esac
     [ "$ppid" -gt 1 ] || return 1
     pid=$ppid

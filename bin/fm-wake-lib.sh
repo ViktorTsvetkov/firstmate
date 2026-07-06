@@ -10,6 +10,8 @@ FM_WAKE_QUEUE="${FM_WAKE_QUEUE:-$STATE/.wake-queue}"
 FM_WAKE_QUEUE_LOCK="${FM_WAKE_QUEUE_LOCK:-$STATE/.wake-queue.lock}"
 FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
 mkdir -p "$STATE"
+# shellcheck source=bin/fm-platform-lib.sh
+. "$FM_WAKE_LIB_DIR/fm-platform-lib.sh"
 
 fm_current_pid() {
   printf '%s\n' "${BASHPID:-$$}"
@@ -18,18 +20,10 @@ fm_current_pid() {
 # Windows-port seam (STRICT ADDITIVE): true only on native Windows shells (Git
 # Bash / Cygwin / MSYS). Every Windows-specific code path in this file is selected
 # by this predicate; Linux/macOS fall through to the exact original behavior. The
-# result is memoized (one `uname` per process) and honors a pre-set FM_IS_WINDOWS
-# so tests can force either branch. Later phases build their platform conditionals
-# on this same predicate (the full fm-platform-lib.sh seam is a later phase).
-FM_IS_WINDOWS="${FM_IS_WINDOWS:-}"
+# result is memoized by fm-platform-lib.sh and honors FM_IS_WINDOWS/
+# FM_PLATFORM_IS_WINDOWS so tests can force either branch.
 fm_is_windows() {
-  if [ -z "$FM_IS_WINDOWS" ]; then
-    case "$(uname -s 2>/dev/null)" in
-      CYGWIN*|MINGW*|MSYS*) FM_IS_WINDOWS=yes ;;
-      *) FM_IS_WINDOWS=no ;;
-    esac
-  fi
-  [ "$FM_IS_WINDOWS" = yes ]
+  fm_platform_is_windows
 }
 
 # Read the first line of a file into the named variable with no subprocess.
@@ -69,7 +63,7 @@ fm_pid_identity() {
   # STRICT ADDITIVE: Linux/macOS keep the exact original `ps -o` fingerprint;
   # native Windows (whose Cygwin `ps` rejects -o) takes a /proc fallback instead.
   if fm_is_windows; then
-    fm_pid_identity_win "$pid"
+    fm_platform_pid_identity "$pid"
     return
   fi
   out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
@@ -101,7 +95,7 @@ fm_pid_identity_win() {
 }
 
 fm_path_mtime() {
-  if [ "$(uname)" = Darwin ]; then
+  if fm_platform_is_macos; then
     stat -f %m "$1" 2>/dev/null
   else
     stat -c %Y "$1" 2>/dev/null

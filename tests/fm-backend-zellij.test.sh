@@ -12,6 +12,11 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# This suite sources and runs firstmate scripts against sandboxed roots/state.
+# Ambient home/root overrides from a live firstmate session must not shadow the
+# fixtures; individual tests still set explicit sandbox overrides inline.
+unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE
+
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the zellij adapter)"; exit 0; }
 
 TMP_ROOT=$(fm_test_tmproot fm-backend-zellij-tests)
