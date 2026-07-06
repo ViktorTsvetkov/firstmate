@@ -225,6 +225,7 @@ SH
 #     on Windows, past a 1s hold, so the last contender would steal a dead-pid lock.
 # On Linux/macOS all three take their original values (scale 1, hold 1s), so the
 # assertions and timing are byte-for-byte what they were; only Windows differs.
+# shellcheck disable=SC2034 # FM_TEST_IS_WINDOWS is read by tests that source this helper.
 case "$(uname -s)" in
   CYGWIN*|MINGW*|MSYS*)
     FM_TEST_IS_WINDOWS=yes
