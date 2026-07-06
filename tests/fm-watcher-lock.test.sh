@@ -304,6 +304,12 @@ test_lock_empty_pid_uses_minimum_grace() {
   mkdir "$lockdir"
   out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
     . "$1"
+    # Windows-scoped proof-test hardening: the minimum-grace floor is 2s and
+    # fm_path_age is whole-second, but on Windows the subshell fork + lib source
+    # can age this freshly-made empty lock past 2s before the acquire runs (a
+    # test-setup race, not a lock bug), so refresh its mtime here to keep age ~0 at
+    # the check. POSIX is untouched (fm_is_windows is false there).
+    fm_is_windows && touch "$2"
     if fm_lock_try_acquire "$2"; then rc=0; else rc=1; fi
     printf "rc=%s held=%s\n" "$rc" "${FM_LOCK_HELD_PID:-}"
   ' _ "$LIB" "$lockdir")
