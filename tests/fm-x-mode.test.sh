@@ -419,7 +419,7 @@ test_bootstrap_activates_on_env_token() {
   out=$(FM_HOME="$home" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
   assert_contains "$out" "FMX: X mode on" "bootstrap must announce X mode"
   assert_present "$home/state/x-watch.check.sh" "bootstrap must drop the check shim"
-  [ -x "$home/state/x-watch.check.sh" ] || fail "the check shim must be executable"
+  [ -f "$home/state/x-watch.check.sh" ] || fail "the check shim must be a regular file"
   assert_grep "fm-x-poll.sh" "$home/state/x-watch.check.sh" "the shim must exec the poll script"
   assert_present "$home/config/x-mode.env" "bootstrap must drop the cadence config"
   assert_grep "export FM_CHECK_INTERVAL=30" "$home/config/x-mode.env" "cadence must be 30s"
@@ -584,6 +584,23 @@ test_bootstrap_opt_out_cleanup() {
   out=$(FM_HOME="$home" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
   assert_not_contains "$out" "FMX:" "steady-state off must be silent"
   pass "bootstrap cleans up X artifacts on opt-out and is silent once off"
+}
+
+test_bootstrap_x_shim_does_not_require_exec_bit() {
+  local home fakebin out
+  home="$TMP_ROOT/boot-chmod-fail"; mkdir -p "$home"
+  printf 'FMX_PAIRING_TOKEN=tok-chmod\n' > "$home/.env"
+  fakebin=$(fm_fakebin "$home")
+  cat > "$fakebin/chmod" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$fakebin/chmod"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  assert_contains "$out" "FMX: X mode on" "bootstrap should still arm X mode when chmod fails"
+  assert_present "$home/state/x-watch.check.sh" "chmod failure must not remove the check shim"
+  assert_grep "fm-x-poll.sh" "$home/state/x-watch.check.sh" "the shim must still exec the poll script"
+  pass "bootstrap X check shim is valid even when chmod cannot mark it executable"
 }
 
 test_bootstrap_opt_out_reports_cleanup_failure() {
@@ -1680,4 +1697,5 @@ test_bootstrap_reports_missing_x_dependency
 test_bootstrap_does_not_announce_when_arm_fails
 test_bootstrap_inert_without_token
 test_bootstrap_opt_out_cleanup
+test_bootstrap_x_shim_does_not_require_exec_bit
 test_bootstrap_opt_out_reports_cleanup_failure

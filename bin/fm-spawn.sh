@@ -92,6 +92,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-platform-lib.sh
+. "$SCRIPT_DIR/fm-platform-lib.sh"
 # Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
 # set by the batch loop below), so the guard runs once for the batch, not once per pair.
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
@@ -805,12 +807,12 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   validate_spawn_worktree "treehouse get" "$T"
 fi
 
-# Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
+# Per-task temp root: ${TMPDIR:-/tmp}/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
 # create GOTMPDIR, so mkdir before it is used; fm-teardown removes the whole root.
-# Nested (not a bare /tmp/fm-<id>/gotmp) so other per-task temp can live alongside
-# later, and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the
-# targeted knob: TMPDIR is too broad (affects every program's temp, not just Go's).
-TASK_TMP="/tmp/fm-$ID"
+# Nested (not a bare fm-<id>/gotmp) so other per-task temp can live alongside later,
+# and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the targeted
+# knob: TMPDIR is too broad (affects every program's temp, not just Go's).
+TASK_TMP="$(fm_platform_temp_root)/fm-$ID"
 mkdir -p "$TASK_TMP/gotmp"
 
 # Per-harness turn-end hook: a file that touches state/<id>.turn-ended when the
@@ -879,7 +881,12 @@ EOF
       # (gitignored, like the other harnesses' worktree hook files).
       # Result: the hook is outside the worktree, needs no trust grant, and never
       # touches grok's managed config - only firstmate-owned files.
-      GROK_HOOKS_DIR="${GROK_HOME:-$HOME/.grok}/hooks"
+      if [ -n "${GROK_HOME:-}" ]; then
+        GROK_HOOKS_DIR="$GROK_HOME/hooks"
+      else
+        GROK_BASE=$(fm_platform_home_dir) || { echo "error: grok harness requires GROK_HOME or HOME (USERPROFILE on Windows) to install the turn-end hook" >&2; exit 1; }
+        GROK_HOOKS_DIR="$GROK_BASE/.grok/hooks"
+      fi
       GROK_AUTH_DIR="$GROK_HOOKS_DIR/fm-turn-end.d"
       mkdir -p "$GROK_AUTH_DIR"
       old_umask=$(umask)

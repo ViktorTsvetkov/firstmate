@@ -867,7 +867,7 @@ fm_super_main() {
   local CRASH_BACKOFF=${FM_CRASH_BACKOFF:-$CRASH_BACKOFF_DEFAULT}
   local CRASH_NORMAL_SLEEP=${FM_CRASH_NORMAL_SLEEP:-$CRASH_NORMAL_SLEEP_DEFAULT}
 
-  [ -x "$WATCH" ] || { echo "error: watcher not found or not executable: $WATCH" >&2; exit 1; }
+  [ -f "$WATCH" ] || { echo "error: watcher not found: $WATCH" >&2; exit 1; }
 
   # --- single instance (portable lock, no flock dependency) ------------------
   if ! fm_lock_try_acquire "$LOCK"; then
