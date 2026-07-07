@@ -72,6 +72,14 @@ for a in "$@"; do printf '\x1f%s' "$a" >> "$FM_CYGPATH_LOG"; done
 printf '\n' >> "$FM_CYGPATH_LOG"
 case "${1:-}" in
   -w)
+    if [ "${2:-}" = -s ]; then
+      shift
+      case "${2:-}" in
+        /usr/bin/bash) printf 'C:\\PROGRA~1\\Git\\usr\\bin\\bash.exe\n' ;;
+        *) printf '%s\n' "${2:-}" ;;
+      esac
+      exit 0
+    fi
     case "${2:-}" in
       /c/Users/captain/project) printf 'C:\\Users\\captain\\project\n' ;;
       /c/Users/captain/worktree) printf 'C:\\Users\\captain\\worktree\n' ;;
@@ -849,10 +857,12 @@ test_windows_create_task_converts_shell_env_for_tab_create() {
   out=$( PATH="$fb:$PATH" SHELL=/usr/bin/bash FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_CYGPATH_LOG="$cyglog" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-newtask /c/Users/captain/project' "$ROOT" )
   [ "$out" = "w1:t2 w1:p2" ] || fail "create_task should still echo '<tab_id> <pane_id>', got '$out'"
-  assert_contains "$(cat "$cyglog")" $'cygpath\x1f-w\x1f/usr/bin/bash' \
-    "Windows tab create shell branch did not call cygpath -w for SHELL"
-  assert_contains "$(cat "$log")" $'\x1f''--env'$'\x1f''SHELL=C:\Program Files\Git\usr\bin\bash.exe' \
+  assert_contains "$(cat "$cyglog")" $'cygpath\x1f-w\x1f-s\x1f/usr/bin/bash' \
+    "Windows tab create shell branch did not call cygpath -w -s for SHELL"
+  assert_contains "$(cat "$log")" $'\x1f''--env'$'\x1f''SHELL=C:\PROGRA~1\Git\usr\bin\bash.exe' \
     "Windows tab create did not pass a Windows-form SHELL env to herdr"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''run'$'\x1f''w1:p2'$'\x1f''C:\PROGRA~1\Git\usr\bin\bash.exe -l' \
+    "Windows create_task did not start the resolved login shell in the task pane"
   pass "fm_backend_herdr_create_task: Windows branch converts the explicit SHELL env for herdr tab create"
 }
 
@@ -1148,12 +1158,17 @@ test_current_path_reads_cwd() {
 test_windows_current_path_normalizes_foreground_cwd_to_posix() {
   local dir log resp fb out cyglog
   dir="$TMP_ROOT/cwd-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; cyglog="$dir/cygpath.log"; : > "$log"; : > "$cyglog"
-  printf '%s\n' '{"result":{"pane":{"cwd":"C:\\Users\\captain\\project","foreground_cwd":"C:\\Users\\captain\\worktree"}}}' > "$resp/1.out"
+  : > "$resp/1.out"
+  printf '%s\n' '__FM_HERDR_CWD_BEGIN__' 'C:\Users\captain\worktree' '__FM_HERDR_CWD_END__' > "$resp/2.out"
   fb=$(make_herdr_fakebin "$dir")
   add_cygpath_fake "$fb"
   out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_CYGPATH_LOG="$cyglog" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_current_path default:w1:p2' "$ROOT" )
   [ "$out" = "/c/Users/captain/worktree" ] || fail "Windows current_path should normalize foreground_cwd to POSIX form, got '$out'"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''run'$'\x1f''w1:p2'$'\x1f'"printf '%s\\n' '__FM_HERDR_CWD_BEGIN__'; pwd; printf '%s\\n' '__FM_HERDR_CWD_END__'" \
+    "Windows current_path branch did not actively probe the pane cwd"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2' \
+    "Windows current_path branch did not read the active cwd probe output"
   assert_contains "$(cat "$cyglog")" 'cygpath'$'\x1f''-u'$'\x1f''C:\Users\captain\worktree' \
     "Windows current_path branch did not call cygpath -u"
   pass "fm_backend_herdr_current_path: Windows branch normalizes foreground_cwd back to POSIX form"

@@ -52,18 +52,28 @@ case "$cmd $sub" in
       *) husk=false ;;
     esac
     jq -n --arg cwd "C:\\Users\\captain\\project" --argjson husk "$husk" \
-      '{pane:{foreground_cwd:$cwd,husk:$husk}}' > "$STATE"
+      '{pane:{foreground_cwd:$cwd,husk:$husk,shell_started:false}}' > "$STATE"
     printf '{"result":{"tab":{"tab_id":"w1:t2"},"root_pane":{"pane_id":"w1:p2"}}}\n'
     ;;
   "pane run")
     text=${4:-}
-    if [ "$text" = "treehouse get" ] && [ "$(jq -r '.pane.husk' "$STATE")" = false ]; then
+    case "$text" in
+      *'PROGRA~1\Git\usr\bin\bash.exe -l')
+        if [ "$(jq -r '.pane.husk' "$STATE")" = false ]; then
+          jq '.pane.shell_started = true' "$STATE" > "$STATE.tmp" &&
+            mv "$STATE.tmp" "$STATE"
+        fi
+        ;;
+    esac
+    if [ "$text" = "treehouse get" ] && [ "$(jq -r '.pane.shell_started' "$STATE")" = true ]; then
       jq '.pane.foreground_cwd = "C:\\Users\\captain\\worktree"' "$STATE" > "$STATE.tmp" &&
         mv "$STATE.tmp" "$STATE"
     fi
     case "$text" in
       *"__FM_HERDR_CWD_BEGIN__"*)
-        jq '.pane.probed = true' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+        if [ "$(jq -r '.pane.shell_started' "$STATE")" = true ]; then
+          jq '.pane.probed = true' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+        fi
         ;;
     esac
     ;;
@@ -149,6 +159,8 @@ EOF
     "Windows shell resolution must request a short, space-free native Git Bash path"
   assert_contains "$(cat "$log")" "SHELL=C:\\PROGRA~1\\Git\\usr\\bin\\bash.exe" \
     "create_task did not pass the space-safe shell path to herdr"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''run'$'\x1f''w1:p2'$'\x1f''C:\PROGRA~1\Git\usr\bin\bash.exe -l' \
+    "create_task did not start the resolved login shell before handoff"
   pass "fm_backend_herdr handoff: Windows create_task -> pane run treehouse get -> current_path enters the worktree"
 }
 
