@@ -20,13 +20,6 @@
 #     does not reimplement their logic
 set -u
 
-# WINDOWS-DEFER: read-only tangle diagnostic missing on Windows; deferred to winport Phase 0-4 (triage pending). STRICT ADDITIVE - Linux/macOS still
-# run this test in full (ubuntu CI is the authoritative gate); it self-skips only on
-# native Windows, where this pre-existing substrate failure is not this PR's job.
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) echo "skip: WINDOWS-DEFER fm-session-start - read-only tangle diagnostic missing on Windows (winport Phase 0-4 (triage pending))"; exit 0 ;;
-esac
-
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=tests/wake-helpers.sh
@@ -153,6 +146,32 @@ run_session_start() {  # <home> <root> <path>
   FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" "$SESSION_START"
 }
 
+capture_read_only_tangle_line() {  # <platform-is-windows>
+  local platform=$1 rec root home fakebin holder_pid out status tangle
+  rec=$(new_world "read-only-tangle-$platform")
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  append_wake "$home/state" signal task-a "working: queued" || fail "seed wake failed"
+  git -C "$root" checkout -q -B fm/read-only-tangle
+
+  sleep 300 &
+  holder_pid=$!
+  printf '%s\n' "$holder_pid" > "$home/state/.lock"
+
+  status=0
+  out=$(FM_PLATFORM_IS_WINDOWS="$platform" run_session_start "$home" "$root" "$fakebin:$BASE_PATH") || status=$?
+  kill "$holder_pid" 2>/dev/null || true
+  wait "$holder_pid" 2>/dev/null || true
+
+  expect_code 0 "$status" "fm-session-start.sh must exit 0 even on a forced $platform lock refusal"
+  tangle=$(printf '%s\n' "$out" | grep '^TANGLE:' || true)
+  [ -n "$tangle" ] || fail "forced $platform read-only session did not emit a TANGLE diagnostic: $out"
+  printf '%s\n' "$tangle"
+}
+
 # --- context digest: absent vs empty vs present -----------------------------
 
 test_context_digest_absent_empty_present() {
@@ -251,6 +270,24 @@ EOF
   assert_contains "$out" "NEXT STEP" "closing reminder missing on the read-only path"
 
   pass "a lock refusal prints a loud read-only banner, skips every mutating step, and still completes the digest"
+}
+
+test_lock_refusal_forced_windows_tangle_diagnostic() {
+  local tangle
+  tangle=$(capture_read_only_tangle_line yes)
+  assert_contains "$tangle" "TANGLE: primary checkout on feature branch 'fm/read-only-tangle'" "forced Windows read-only bootstrap did not surface the tangle diagnostic"
+  assert_contains "$tangle" "read-only session must leave restore work" "forced Windows tangle diagnostic did not explain restore ownership"
+
+  pass "forced Windows read-only session-start emits the tangle diagnostic"
+}
+
+test_lock_refusal_forced_posix_tangle_diagnostic_byte_identical() {
+  local tangle expected
+  expected="TANGLE: primary checkout on feature branch 'fm/read-only-tangle' (expected 'main'); the work is safe on that ref - read-only session must leave restore work to the session holding the fleet lock"
+  tangle=$(capture_read_only_tangle_line no)
+  [ "$tangle" = "$expected" ] || fail "forced POSIX tangle diagnostic changed"$'\n'"expected: $expected"$'\n'"actual:   $tangle"
+
+  pass "forced POSIX read-only tangle diagnostic is byte-identical to the upstream text"
 }
 
 # --- output ordering ----------------------------------------------------------
@@ -484,6 +521,8 @@ EOF
 
 test_context_digest_absent_empty_present
 test_lock_refusal_read_only_path
+test_lock_refusal_forced_windows_tangle_diagnostic
+test_lock_refusal_forced_posix_tangle_diagnostic_byte_identical
 test_output_ordering_diagnostics_lead
 test_status_tail_bounding
 test_orphan_status_logs_are_printed
