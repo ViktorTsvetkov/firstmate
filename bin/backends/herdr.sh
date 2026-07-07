@@ -5,7 +5,7 @@
 # decisions D1-D6) and the empirical verification recorded in
 # data/fm-backend-design-d7/herdr-verification-p2.md (real herdr v0.7.1,
 # protocol 14, macOS aarch64), refined by docs/herdr-backend.md's
-# "workspace-per-home" pass (AGENTS.md task herdr-sm-spaces-k4). Herdr is a
+# workspace-per-home and native-Windows handoff verification. Herdr is a
 # session provider ONLY (D3): the worktree provider stays treehouse, exactly
 # like tmux. Sourced only through bin/fm-backend.sh's fm_backend_source in
 # normal operation; the unit tests source it directly, so the FM_HOME fallback

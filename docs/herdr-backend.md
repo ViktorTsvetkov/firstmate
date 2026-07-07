@@ -4,7 +4,7 @@ This document records the empirical verification behind `bin/backends/herdr.sh`,
 It is the herdr equivalent of the tmux facts recorded in the `harness-adapters` skill and `docs/architecture.md`'s "Runtime session backends" section.
 
 Herdr is [an agent-native terminal multiplexer](https://herdr.dev) with a socket API, CLI wrappers, and native per-pane agent-state detection.
-Verified against the real installed binary: herdr 0.7.1, protocol 14, macOS aarch64.
+Verified against real installed binaries: herdr 0.7.1, protocol 14, on macOS aarch64 and native Windows Git Bash.
 Current real-herdr verification uses isolated `HERDR_SESSION` names plus the guarded teardown helper in `tests/herdr-test-safety.sh`.
 A 2026-07-02 cleanup bug proved that `HERDR_SESSION` alone is not a safe way to target destructive session cleanup; see "Session targeting: the `--session` flag, not `HERDR_SESSION` alone" below.
 All real-herdr verification in this document uses isolated sessions and guarded cleanup; the captain's default herdr session and live tmux fleet were never intended targets.
@@ -382,7 +382,8 @@ This is a test-harness-only concern - `fm_backend_herdr_composer_state` and `fm_
 
 ## Native Windows (Git Bash) path handling
 
-The real-binary verification above was all on macOS aarch64, but the adapter also runs on native Windows under Git Bash, where herdr is a Windows-native process that speaks Windows-form paths and emits CRLF line endings while the surrounding bash speaks POSIX (`/c/...`) paths and LF.
+Most real-binary verification above was on macOS aarch64, and the spawn handoff path is also verified on native Windows Git Bash as recorded below.
+On native Windows herdr is a Windows-native process that speaks Windows-form paths and emits CRLF line endings while the surrounding bash speaks POSIX (`/c/...`) paths and LF.
 Six narrow, additive conversions bridge that gap, each gated on `fm_platform_is_windows` (`bin/fm-platform-lib.sh`) so the POSIX path is byte-for-byte unchanged:
 
 - **`--cwd` out to herdr is converted with `cygpath -w`.** `fm_backend_herdr_cwd_arg` translates the POSIX `--cwd` to its Windows form before every `workspace create` and `tab create`, so Windows-native herdr lands the workspace/tab in the intended directory instead of misreading a `/c/...` string.
