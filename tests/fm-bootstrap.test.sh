@@ -257,6 +257,33 @@ test_windows_materialized_tracked_symlink_stays_porcelain_clean() {
   pass "bootstrap materializes tracked Windows CLAUDE.md and keeps porcelain clean via skip-worktree"
 }
 
+test_windows_edited_tracked_symlink_placeholder_is_not_overwritten() {
+  local case_dir root fakebin out before after status
+  case_dir="$TMP_ROOT/claude-md-edited-placeholder"
+  root="$case_dir/root"
+  mkdir -p "$root"
+  make_git_symlink_placeholder_repo "$root"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  printf '%s\n' 'custom local claude edits' > "$root/CLAUDE.md"
+  before=$(cat "$root/CLAUDE.md")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$root" FM_ROOT_OVERRIDE="$root" FM_PLATFORM_IS_WINDOWS=yes \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  after=$(cat "$root/CLAUDE.md")
+  status=$(git -C "$root" status --porcelain)
+
+  [ "$out" = "CLAUDE_MD: skipped: CLAUDE.md diverges from AGENTS.md but is not the tracked symlink placeholder" ] \
+    || fail "Windows edited tracked-symlink CLAUDE.md should be skipped, got: $out"
+  [ "$before" = "$after" ] || fail "edited tracked-symlink CLAUDE.md was overwritten"
+  printf '%s\n' "$status" | grep -F CLAUDE.md >/dev/null || fail "edited tracked-symlink CLAUDE.md should remain visibly dirty"
+  case "$(git -C "$root" ls-files -s -- CLAUDE.md)" in
+    120000*) : ;;
+    *) fail "edited symlink-placeholder fixture was not tracked as mode 120000" ;;
+  esac
+
+  pass "bootstrap does not overwrite an edited tracked-symlink Windows CLAUDE.md"
+}
+
 test_windows_regular_tracked_claude_md_is_not_overwritten() {
   local case_dir root fakebin out before after status
   case_dir="$TMP_ROOT/claude-md-regular-tracked"
@@ -440,6 +467,7 @@ test_no_mistakes_min_version
 test_orca_backend_gates_orca_tool_only_when_selected
 test_windows_skips_untracked_divergent_claude_md
 test_windows_materialized_tracked_symlink_stays_porcelain_clean
+test_windows_edited_tracked_symlink_placeholder_is_not_overwritten
 test_windows_regular_tracked_claude_md_is_not_overwritten
 test_windows_skip_worktree_failure_is_reported
 test_detect_only_does_not_materialize_windows_claude_md

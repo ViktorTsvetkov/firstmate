@@ -89,6 +89,22 @@ windows_claude_is_tracked_symlink_placeholder() {
   [ "$mode" = 120000 ]
 }
 
+windows_claude_matches_tracked_symlink_target() {
+  local claude tmp
+  claude="$FM_ROOT/CLAUDE.md"
+  git -C "$FM_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  windows_claude_is_tracked_symlink_placeholder || return 1
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fm-claude-target.XXXXXX" 2>/dev/null) || return 1
+  git -C "$FM_ROOT" cat-file blob :CLAUDE.md >"$tmp" 2>/dev/null || {
+    rm -f "$tmp"
+    return 1
+  }
+  cmp -s "$claude" "$tmp"
+  local matched=$?
+  rm -f "$tmp"
+  return "$matched"
+}
+
 mark_windows_claude_skip_worktree() {
   git -C "$FM_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
   git -C "$FM_ROOT" ls-files --error-unmatch -- CLAUDE.md >/dev/null 2>&1 || return 1
@@ -120,6 +136,10 @@ materialize_windows_claude_md() {
     return 0
   fi
   if ! windows_claude_is_tracked_symlink_placeholder; then
+    echo "CLAUDE_MD: skipped: CLAUDE.md diverges from AGENTS.md but is not the tracked symlink placeholder"
+    return 0
+  fi
+  if ! windows_claude_matches_tracked_symlink_target; then
     echo "CLAUDE_MD: skipped: CLAUDE.md diverges from AGENTS.md but is not the tracked symlink placeholder"
     return 0
   fi
