@@ -531,24 +531,45 @@ crew_dispatch_validate() {
     echo "CREW_DISPATCH: invalid config/crew-dispatch.json - $err"
     return 0
   fi
-  jq -r '
-    def profile($p):
-      ($p.harness | tostring)
-      + (if ($p.model? != null) then "/" + ($p.model | tostring)
-         elif ($p.effort? != null) then "/default"
-         else "" end)
-      + (if ($p.effort? != null) then "/" + ($p.effort | tostring) else "" end);
-    def use_label($r):
-      if ($r.use | type) == "array" then
-        ((if ($r.select? != null) then ($r.select | tostring) else "first" end)
-          + "[" + ([$r.use[] | profile(.)] | join(", ")) + "]")
-      else profile($r.use)
-      end;
-    (["CREW_DISPATCH: active config/crew-dispatch.json"]
-      + [(.rules // [])[]? | "  rule: " + (.when | tostring) + " -> " + use_label(.)]
-      + (if (.default? | type) == "object" then ["  default: " + profile(.default)] else [] end))
-    | .[]
-  ' "$file"
+  if fm_platform_is_windows; then
+    jq -r '
+      def profile($p):
+        ($p.harness | tostring)
+        + (if ($p.model? != null) then "/" + ($p.model | tostring)
+           elif ($p.effort? != null) then "/default"
+           else "" end)
+        + (if ($p.effort? != null) then "/" + ($p.effort | tostring) else "" end);
+      def use_label($r):
+        if ($r.use | type) == "array" then
+          ((if ($r.select? != null) then ($r.select | tostring) else "first" end)
+            + "[" + ([$r.use[] | profile(.)] | join(", ")) + "]")
+        else profile($r.use)
+        end;
+      (["CREW_DISPATCH: active config/crew-dispatch.json"]
+        + [(.rules // [])[]? | "  rule: " + (.when | tostring) + " -> " + use_label(.)]
+        + (if (.default? | type) == "object" then ["  default: " + profile(.default)] else [] end))
+      | .[]
+    ' "$file" | tr -d '\r'
+  else
+    jq -r '
+      def profile($p):
+        ($p.harness | tostring)
+        + (if ($p.model? != null) then "/" + ($p.model | tostring)
+           elif ($p.effort? != null) then "/default"
+           else "" end)
+        + (if ($p.effort? != null) then "/" + ($p.effort | tostring) else "" end);
+      def use_label($r):
+        if ($r.use | type) == "array" then
+          ((if ($r.select? != null) then ($r.select | tostring) else "first" end)
+            + "[" + ([$r.use[] | profile(.)] | join(", ")) + "]")
+        else profile($r.use)
+        end;
+      (["CREW_DISPATCH: active config/crew-dispatch.json"]
+        + [(.rules // [])[]? | "  rule: " + (.when | tostring) + " -> " + use_label(.)]
+        + (if (.default? | type) == "object" then ["  default: " + profile(.default)] else [] end))
+      | .[]
+    ' "$file"
+  fi
 }
 
 if [ "${1:-}" = "install" ]; then
