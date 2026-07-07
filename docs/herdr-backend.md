@@ -105,12 +105,13 @@ Once a workspace exists, spawning - primary or secondmate, workspace or tab - sh
 
 ### Task tab shell seed: so the pane handoff actually runs
 
-`fm_backend_herdr_create_task` seeds each new task tab with an explicit `--env SHELL=<shell>` so the pane comes up running a real shell.
-Without it, a herdr task tab was created as a shell-less empty pane: the `treehouse get` handoff text `fm-spawn.sh` sends into the pane never executed, the worktree subshell never landed, and the spawn hung - a gating bug for firstmate running its crew on herdr.
-`fm_backend_herdr_shell_arg` resolves the shell from `$SHELL`, falling back to `bash` then `sh` via `command -v`; on Windows the resolved path is converted with `cygpath -w` (see "Native Windows path handling" below).
+`fm_backend_herdr_create_task` seeds each new task tab with an explicit `--env SHELL=<shell>` and, on native Windows, explicitly starts Git Bash in the pane after `tab create`.
+Without a real shell, the `treehouse get` handoff text `fm-spawn.sh` sends into the pane never executes, the worktree subshell never lands, and the spawn hangs - a gating bug for firstmate running its crew on herdr.
+On POSIX, `fm_backend_herdr_shell_arg` still resolves the shell from `$SHELL`, falling back to `bash` then `sh` via `command -v`.
+On Windows, `fm_backend_herdr_shell_arg` ignores an inherited `$SHELL` and resolves native Git Bash with `command -v bash`, then converts it with `cygpath -w -s` so the path is Windows-native and space-free (see "Native Windows path handling" below).
 The `--env SHELL=...` flag is added ONLY when a shell actually resolves - if none does, the tab-create call is byte-identical to before.
 This is herdr-backend-only: the shared/tmux spawn path in `fm-spawn.sh` is untouched, so the tmux/Linux/macOS path is unchanged.
-Covered by `tests/fm-backend-herdr.test.sh`'s `test_create_task_passes_explicit_shell_env` and `test_windows_create_task_converts_shell_env_for_tab_create`.
+Covered by `tests/fm-backend-herdr.test.sh`'s `test_create_task_passes_explicit_shell_env` and `test_windows_create_task_converts_shell_env_for_tab_create`, plus `tests/fm-backend-herdr-handoff.test.sh`'s handoff regression.
 
 ### Label collisions: adopt-don't-duplicate, unchanged in spirit
 
@@ -385,14 +386,37 @@ The real-binary verification above was all on macOS aarch64, but the adapter als
 Six narrow, additive conversions bridge that gap, each gated on `fm_platform_is_windows` (`bin/fm-platform-lib.sh`) so the POSIX path is byte-for-byte unchanged:
 
 - **`--cwd` out to herdr is converted with `cygpath -w`.** `fm_backend_herdr_cwd_arg` translates the POSIX `--cwd` to its Windows form before every `workspace create` and `tab create`, so Windows-native herdr lands the workspace/tab in the intended directory instead of misreading a `/c/...` string.
-- **The seeded task-tab `SHELL` env value is converted with `cygpath -w`.** `fm_backend_herdr_shell_arg` resolves the pane's shell (`$SHELL`, else `bash` then `sh` via `command -v`) and, on Windows, passes its Windows-form path in the `--env SHELL=...` it hands to `tab create`, so the Windows-native pane can exec the shell it needs to run the spawn handoff (see "Task tab shell seed" above). The `SHELL` env itself is cross-platform; only this path conversion is Windows-gated.
-- **`foreground_cwd` back from herdr is normalized with `cygpath -u`.** `fm_backend_herdr_current_path` converts the pane's live `foreground_cwd` back to POSIX form, so `fm-spawn.sh`'s worktree-discovery poll compares like-for-like against its own POSIX `PROJ_ABS`/worktree path instead of false-mismatching a Windows-form string. An empty `foreground_cwd` emits nothing on either platform (the POSIX empty case now returns no bytes rather than a bare newline).
+- **The seeded task-tab shell is native Git Bash and space-safe.** `fm_backend_herdr_shell_arg` ignores inherited `$SHELL` on Windows, resolves Git Bash from `command -v bash`, and passes `cygpath -w -s` output in `--env SHELL=...`; `fm_backend_herdr_create_task` then runs that shell explicitly with `pane run <pane> "<shell> -l"`.
+This avoids both failure modes observed on Windows: an inherited WSL-flavored `$SHELL` selecting the wrong shell, and `C:\Program Files\...` breaking herdr's shell handoff.
+- **The live cwd is actively probed on Windows.** Native Windows herdr 0.7.1 reports only the pane's frozen creation-time `cwd` in `pane get`; it does not emit `.result.pane.foreground_cwd` there.
+On Windows, `fm_backend_herdr_current_path` therefore submits a marked `pwd` probe into the live pane and parses the marked output from `pane read`, so `fm-spawn.sh` sees the cwd of the `treehouse get` subshell.
+POSIX keeps the passive `foreground_cwd` read and normalizes that value with `cygpath -u` only when the Windows branch is active.
 - **A trailing carriage return is stripped from every value read back from herdr.** `fm_backend_herdr_windows_strip_cr` runs `tr -d '\r'` on Windows and passes through (`cat`) on POSIX. Because Windows-native herdr emits CRLF, a trailing `\r` would otherwise taint every jq-extracted value the adapter compares or returns - protocol/version gate, server-running poll, default-tab prune label/agent-status checks, pane-agent-state round-trips and error-code compares, `parse_target`'s session/pane split, bounded `capture` and composer-state reads, busy-state, `pane_for_tab`, and `list_live`'s tab id/label - breaking exact-string compares such as `[ "$status" = working ]` and polluting captured pane text, returned targets, and paths. The strip is applied to each such value before it is compared or emitted.
 - **The headless server is launched detached via `nohup`.** `fm_backend_herdr_server_start` starts the server through `nohup bash -c '... herdr server ...' & disown` on Windows, where the POSIX `( ... & )` backgrounded-subshell form does not reliably survive; POSIX keeps the exact pre-existing subshell launch.
 - **The composer's leading prompt glyph is stripped as a literal fixed string.** `fm_backend_herdr_composer_state`'s prompt-glyph strip uses `${stripped#'❯ '}`-style exact-prefix removals on Windows, because msys2/Git-Bash bash's byte-oriented `${x#??}`/`${x#?}` parameter expansions mangle the 3-byte prompt glyph U+276F (`❯`) and would misclassify the empty-composer ghost placeholder as pending. POSIX keeps the original byte-count `${x#??}`/`${x#?}` expansions; the ASCII prompts (`>`, `$`, `%`, `#`) are handled on both paths.
 
 On POSIX every conversion is a no-op: no `cygpath` is invoked (the cwd and the resolved shell path are passed through untouched), the CR strip is an identity passthrough, the composer prompt-glyph strip is the original byte-count parameter expansion, and the server launch is the original backgrounded subshell.
-This Windows handling is covered by fake-CLI unit tests (`tests/fm-backend-herdr.test.sh`'s `test_windows_*`/`test_posix_*` pairs, which assert the Windows branch calls `cygpath`/`nohup` and strips CR from each value it compares or returns, and that the POSIX branch never does and stays byte-identical - including that a POSIX empty `foreground_cwd` emits no bytes); it has not yet been verified against a real Windows herdr binary.
+This Windows handling is covered by fake-CLI unit tests (`tests/fm-backend-herdr.test.sh`'s `test_windows_*`/`test_posix_*` pairs, which assert the Windows branch calls `cygpath`/`nohup` and strips CR from each value it compares or returns, and that the POSIX branch never does and stays byte-identical - including that a POSIX empty `foreground_cwd` emits no bytes) and by `tests/fm-backend-herdr-handoff.test.sh`.
+
+### Native Windows handoff verification (2026-07-07)
+
+Verified on native Windows Git Bash against real herdr 0.7.1 with an isolated `HERDR_SESSION=fm-husk-live-fixed2`, a scratch Git project, and a scratch `FM_HOME`.
+The exact spawn command was:
+
+```bash
+env HERDR_SESSION=fm-husk-live-fixed2 SHELL=/usr/bin/bash FM_ROOT_OVERRIDE=/c/Users/viktor/.treehouse/firstmate-upstream-0bcca5/1/firstmate-upstream FM_STATE_OVERRIDE=/tmp/fm-herdr-live-fixed2.nXmBw5/state FM_DATA_OVERRIDE=/tmp/fm-herdr-live-fixed2.nXmBw5/data FM_CONFIG_OVERRIDE=/tmp/fm-herdr-live-fixed2.nXmBw5/config FM_PROJECTS_OVERRIDE=/tmp/fm-herdr-live-fixed2.nXmBw5/projects FM_SPAWN_NO_GUARD=1 /c/Users/viktor/.treehouse/firstmate-upstream-0bcca5/1/firstmate-upstream/bin/fm-spawn.sh husklivefix2 /tmp/fm-herdr-live-fixed2.nXmBw5/scratch-project --backend herdr "sh -c 'echo live-herdr-ok; pwd; sleep 5'"
+```
+
+The shell path used by the backend was `C:\PROGRA~1\Git\usr\bin\bash.exe`.
+The command exited `0` and printed:
+
+```text
+spawned husklivefix2 harness=sh kind=ship mode=no-mistakes yolo=off window=fm-husk-live-fixed2:w1:p2 worktree=/c/Users/viktor/.treehouse/scratch-project-0fc173/1/scratch-project
+```
+
+`fm_backend_herdr_current_path` then returned `/c/Users/viktor/.treehouse/scratch-project-0fc173/1/scratch-project`.
+The pane capture showed PowerShell starting `C:\PROGRA~1\Git\usr\bin\bash.exe -l`, `treehouse get` entering `~\.treehouse\scratch-project-0fc173\1\scratch-project`, the marked `pwd` probe returning `/c/Users/viktor/.treehouse/scratch-project-0fc173/1/scratch-project`, and the raw launch command printing `live-herdr-ok` from that same worktree.
+`bin/fm-teardown.sh husklivefix2` then returned the treehouse worktree and closed the herdr pane.
 
 ## Known gaps and follow-up notes
 

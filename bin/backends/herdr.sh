@@ -112,16 +112,18 @@ fm_backend_herdr_cwd_arg() {  # <posix-cwd>
 }
 
 fm_backend_herdr_shell_arg() {
-  local shell_path=${SHELL:-}
+  local shell_path
+  if fm_platform_is_windows; then
+    shell_path=$(command -v bash 2>/dev/null || printf '%s' /usr/bin/bash)
+    cygpath -w -s "$shell_path"
+    return
+  fi
+  shell_path=${SHELL:-}
   if [ -z "$shell_path" ]; then
     shell_path=$(command -v bash 2>/dev/null || command -v sh 2>/dev/null || true)
   fi
   [ -n "$shell_path" ] || return 0
-  if fm_platform_is_windows; then
-    cygpath -w "$shell_path"
-  else
-    printf '%s' "$shell_path"
-  fi
+  printf '%s' "$shell_path"
 }
 
 fm_backend_herdr_server_start() {  # <session>
@@ -532,6 +534,9 @@ EOF
     echo "error: could not parse tab/pane id from herdr tab create output" >&2
     return 1
   fi
+  if [ -n "$shell_arg" ] && fm_platform_is_windows; then
+    fm_backend_herdr_cli "$session" pane run "$pane_id" "$shell_arg -l" >/dev/null 2>&1 || return 1
+  fi
   [ -z "$seeded_tab_id" ] || fm_backend_herdr_workspace_prune_seeded_default_tab "$session" "$wsid" "$seeded_tab_id"
   if [ -n "$dup_tab_ids" ]; then
     while IFS= read -r dup; do
@@ -589,8 +594,33 @@ fm_backend_herdr_target_ready() {  # <target>
 # process's cwd instead, which is what changes when `treehouse get` enters its
 # worktree subshell - confirmed live against a real treehouse acquisition.
 fm_backend_herdr_current_path() {  # <target>
-  local cwd
+  local cwd out line marker_begin="__FM_HERDR_CWD_BEGIN__" marker_end="__FM_HERDR_CWD_END__" in_block=0 chunk="" last=""
   fm_backend_herdr_target_ready "$1" || return 0
+  if fm_platform_is_windows; then
+    fm_backend_herdr_send_text_line "$1" "printf '%s\n' '$marker_begin'; pwd; printf '%s\n' '$marker_end'" || return 0
+    sleep 0.3
+    out=$(fm_backend_herdr_capture "$1" 200) || return 0
+    while IFS= read -r line; do
+      if [ "$line" = "$marker_begin" ]; then
+        in_block=1
+        chunk=""
+        continue
+      fi
+      if [ "$line" = "$marker_end" ]; then
+        case "$chunk" in
+          /*) last=$chunk ;;
+          ?:\\*) last=$(cygpath -u "$chunk") ;;
+        esac
+        in_block=0
+        continue
+      fi
+      [ "$in_block" -eq 1 ] && chunk="$chunk$line"
+    done <<EOF
+$out
+EOF
+    printf '%s' "$last"
+    return
+  fi
   cwd=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
     | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null)
   cwd=$(printf '%s' "$cwd" | fm_backend_herdr_windows_strip_cr)
