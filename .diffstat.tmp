@@ -1,3 +1,0 @@
- bin/fm-bootstrap.sh        | 39 +++++++++++++++++++++++++++------------
- tests/fm-bootstrap.test.sh | 43 +++++++++++++++++++++++++++++--------------
- 2 files changed, 56 insertions(+), 26 deletions(-)
