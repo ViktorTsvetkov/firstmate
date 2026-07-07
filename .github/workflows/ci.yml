@@ -91,6 +91,7 @@ jobs:
             tests/fm-spawn-batch.test.sh
             tests/fm-spawn-dispatch-profile.test.sh
             tests/fm-tangle-guard.test.sh
+            tests/fm-test-runner-windows.test.sh
             tests/fm-turnend-guard.test.sh
             tests/fm-update.test.sh
             tests/fm-wake-daemon-lifecycle-e2e.test.sh
