@@ -75,6 +75,7 @@ case "${1:-}" in
     case "${2:-}" in
       /c/Users/captain/project) printf 'C:\\Users\\captain\\project\n' ;;
       /c/Users/captain/worktree) printf 'C:\\Users\\captain\\worktree\n' ;;
+      /usr/bin/bash) printf 'C:\\Program Files\\Git\\usr\\bin\\bash.exe\n' ;;
       *) printf '%s\n' "${2:-}" ;;
     esac
     ;;
@@ -822,6 +823,37 @@ test_create_task_creates_with_no_focus_flag() {
   assert_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''create'$'\x1f''--workspace'$'\x1f''w1'$'\x1f''--cwd'$'\x1f''/tmp/proj'$'\x1f''--label'$'\x1f''fm-newtask'$'\x1f''--no-focus' \
     "create_task's tab create did not pass --no-focus"
   pass "fm_backend_herdr_create_task: tab create passes --no-focus"
+}
+
+test_create_task_passes_explicit_shell_env() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/create-task-shell-env"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"result":{"tabs":[]}}\n' > "$resp/1.out"
+  printf '{"result":{"tab":{"tab_id":"w1:t2"},"root_pane":{"pane_id":"w1:p2"}}}\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" SHELL=/opt/fm-shell FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-newtask /tmp/proj' "$ROOT" )
+  [ "$out" = "w1:t2 w1:p2" ] || fail "create_task should still echo '<tab_id> <pane_id>', got '$out'"
+  assert_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''create'$'\x1f''--workspace'$'\x1f''w1'$'\x1f''--cwd'$'\x1f''/tmp/proj'$'\x1f''--label'$'\x1f''fm-newtask'$'\x1f''--no-focus'$'\x1f''--env'$'\x1f''SHELL=/opt/fm-shell' \
+    "create_task did not pass an explicit SHELL env to herdr tab create"
+  pass "fm_backend_herdr_create_task: task tab creation passes an explicit SHELL env for the pane handoff"
+}
+
+test_windows_create_task_converts_shell_env_for_tab_create() {
+  local dir log resp fb out cyglog
+  dir="$TMP_ROOT/create-task-windows-shell-env"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; cyglog="$dir/cygpath.log"; : > "$log"; : > "$cyglog"
+  printf '{"result":{"tabs":[]}}\n' > "$resp/1.out"
+  printf '{"result":{"tab":{"tab_id":"w1:t2"},"root_pane":{"pane_id":"w1:p2"}}}\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  add_cygpath_fake "$fb"
+  out=$( PATH="$fb:$PATH" SHELL=/usr/bin/bash FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_CYGPATH_LOG="$cyglog" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-newtask /c/Users/captain/project' "$ROOT" )
+  [ "$out" = "w1:t2 w1:p2" ] || fail "create_task should still echo '<tab_id> <pane_id>', got '$out'"
+  assert_contains "$(cat "$cyglog")" $'cygpath\x1f-w\x1f/usr/bin/bash' \
+    "Windows tab create shell branch did not call cygpath -w for SHELL"
+  assert_contains "$(cat "$log")" $'\x1f''--env'$'\x1f''SHELL=C:\Program Files\Git\usr\bin\bash.exe' \
+    "Windows tab create did not pass a Windows-form SHELL env to herdr"
+  pass "fm_backend_herdr_create_task: Windows branch converts the explicit SHELL env for herdr tab create"
 }
 
 test_windows_container_ensure_converts_cwd_for_workspace_create() {
@@ -1900,6 +1932,8 @@ test_create_task_refuses_when_agent_state_ambiguous
 test_create_task_husk_replacement_creates_before_closing
 test_create_task_creates_and_parses_ids
 test_create_task_creates_with_no_focus_flag
+test_create_task_passes_explicit_shell_env
+test_windows_create_task_converts_shell_env_for_tab_create
 test_windows_create_task_converts_cwd_for_tab_create
 test_posix_create_task_leaves_tab_cwd_byte_identical
 test_workspace_find_matches_only_this_homes_own_label
