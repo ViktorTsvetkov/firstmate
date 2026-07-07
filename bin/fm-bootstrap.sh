@@ -62,17 +62,29 @@ PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
+# shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-tangle-lib.sh
+# shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-tangle-lib.sh"
 # shellcheck source=bin/fm-ff-lib.sh
+# shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-ff-lib.sh"
 # shellcheck source=bin/fm-config-inherit-lib.sh
+# shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
 # shellcheck source=bin/fm-x-lib.sh
+# shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-backend.sh
+# shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+
+mark_windows_claude_skip_worktree() {
+  git -C "$FM_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  git -C "$FM_ROOT" ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1 || return 0
+  git -C "$FM_ROOT" update-index --skip-worktree CLAUDE.md >/dev/null 2>&1 || true
+}
 
 materialize_windows_claude_md() {
   fm_platform_is_windows || return 0
@@ -86,6 +98,7 @@ materialize_windows_claude_md() {
     return 0
   fi
   if [ -f "$claude" ] && cmp -s "$agents" "$claude"; then
+    mark_windows_claude_skip_worktree
     return 0
   fi
   if [ -e "$claude" ] && [ ! -f "$claude" ]; then
@@ -107,6 +120,7 @@ materialize_windows_claude_md() {
     echo "CLAUDE_MD: failed: could not replace broken CLAUDE.md"
     return 0
   }
+  mark_windows_claude_skip_worktree
 }
 
 fleet_sync() {
@@ -464,7 +478,6 @@ fi
 if command -v no-mistakes >/dev/null 2>&1 && ! no_mistakes_compatible; then
   echo "MISSING: no-mistakes (install: $(install_cmd no-mistakes))"
 fi
-materialize_windows_claude_md
 gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
 # Worktree-tangle check: the firstmate primary checkout (FM_ROOT) must sit on its
 # default branch, not a feature branch (see fm-tangle-lib.sh). Scoped to the
@@ -490,6 +503,7 @@ if ! fm_backlog_backend_manual "$CONFIG"; then
   fi
 fi
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
+  materialize_windows_claude_md
   secondmate_sync
   x_mode_setup
   fleet_sync
