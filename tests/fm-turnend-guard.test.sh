@@ -10,13 +10,6 @@
 # All hermetic over temp dirs; no real Claude Code session is invoked.
 set -u
 
-# WINDOWS-DEFER: jq unreachable in hook subshell yields exit 127 on Windows; deferred to winport Phase 0 (hook PATH/env). STRICT ADDITIVE - Linux/macOS still
-# run this test in full (ubuntu CI is the authoritative gate); it self-skips only on
-# native Windows, where this pre-existing substrate failure is not this PR's job.
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) echo "skip: WINDOWS-DEFER fm-turnend-guard - jq unreachable in hook subshell yields exit 127 on Windows (winport Phase 0 (hook PATH/env))"; exit 0 ;;
-esac
-
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -136,6 +129,13 @@ make_crewmate_worktree_dir() {
 run_hook() {
   local dir=$1 stop_active=$2
   printf '{"stop_hook_active":%s}' "$stop_active" | bash "$dir/bin/fm-turnend-guard.sh" 2>&1
+}
+
+copy_tool_to_fakebin() {
+  local fakebin=$1 tool=$2 tool_path
+  tool_path=$(type -P "$tool") || fail "test host must provide external $tool"
+  cp "$tool_path" "$fakebin/$tool" || fail "could not copy $tool into fakebin"
+  chmod +x "$fakebin/$tool"
 }
 
 nonexistent_pid() {
@@ -318,19 +318,33 @@ test_hook_silent_in_crewmate_worktree() {
 }
 
 test_hook_silent_without_jq() {
-  local dir out status fakebin tool tool_path
+  local dir out status fakebin tool
   dir=$(make_primary_dir "$TMP_ROOT/hook-nojq")
   : > "$dir/state/task1.meta"
   fakebin=$(fm_fakebin "$TMP_ROOT/hook-nojq-fake")
   for tool in bash sh git cat printf date uname stat mkdir dirname; do
-    tool_path=$(command -v "$tool") || fail "test host must provide $tool"
-    ln -s "$tool_path" "$fakebin/$tool"
+    copy_tool_to_fakebin "$fakebin" "$tool"
   done
-  out=$(printf '{"stop_hook_active":false}' | PATH="$fakebin" bash "$dir/bin/fm-turnend-guard.sh" 2>&1)
+  out=$(printf '{"stop_hook_active":false}' | FM_PLATFORM_IS_WINDOWS=no PATH="$fakebin" bash "$dir/bin/fm-turnend-guard.sh" 2>&1)
   status=$?
-  expect_code 0 "$status" "hook must fail open (exit 0) when jq is unavailable"
-  [ -z "$out" ] || fail "hook produced output without jq: $out"
-  pass "fm-turnend-guard: fails open (never blocks) when jq is missing"
+  expect_code 0 "$status" "forced-POSIX hook must fail open (exit 0) when jq is unavailable"
+  [ -z "$out" ] || fail "forced-POSIX hook produced output without jq: $out"
+  pass "fm-turnend-guard: forced-POSIX path stays byte-empty when jq is missing"
+}
+
+test_hook_windows_repairs_tool_path_for_jq() {
+  local dir out status fakebin tool
+  dir=$(make_primary_dir "$TMP_ROOT/hook-win-path")
+  : > "$dir/state/task1.meta"
+  fakebin=$(fm_fakebin "$TMP_ROOT/hook-win-path-fake")
+  for tool in bash sh git cat printf date uname stat mkdir dirname; do
+    copy_tool_to_fakebin "$fakebin" "$tool"
+  done
+  out=$(printf '{"stop_hook_active":false}' | FM_PLATFORM_IS_WINDOWS=yes PATH="$fakebin" bash "$dir/bin/fm-turnend-guard.sh" 2>&1)
+  status=$?
+  expect_code 2 "$status" "forced-Windows hook must repair PATH enough to resolve jq and block"
+  assert_contains "$out" "$REQUIRED_REASON" "forced-Windows hook must parse payload after PATH repair"
+  pass "fm-turnend-guard: forced-Windows PATH repair resolves jq for the Stop hook"
 }
 
 test_hook_silent_without_stdin() {
@@ -388,6 +402,7 @@ test_hook_loop_guard_allows_retry
 test_hook_silent_in_secondmate_home
 test_hook_silent_in_crewmate_worktree
 test_hook_silent_without_jq
+test_hook_windows_repairs_tool_path_for_jq
 test_hook_silent_without_stdin
 test_hook_runs_fast
 test_settings_hook_uses_claude_project_dir

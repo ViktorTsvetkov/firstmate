@@ -38,6 +38,24 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 GRACE=${FM_GUARD_GRACE:-300}
 WATCH="$SCRIPT_DIR/fm-watch.sh"
 
+# shellcheck source=bin/fm-platform-lib.sh
+. "$SCRIPT_DIR/fm-platform-lib.sh"
+
+fm_turnend_guard_repair_windows_path() {
+  local dir
+  fm_platform_is_windows || return 0
+  for dir in /usr/bin /bin /mingw64/bin /mingw32/bin; do
+    [ -d "$dir" ] || continue
+    case ":$PATH:" in
+      *":$dir:"*) : ;;
+      *) PATH="$PATH:$dir" ;;
+    esac
+  done
+  export PATH
+}
+
+fm_turnend_guard_repair_windows_path
+
 # shellcheck source=bin/fm-supervision-lib.sh
 . "$SCRIPT_DIR/fm-supervision-lib.sh"
 
