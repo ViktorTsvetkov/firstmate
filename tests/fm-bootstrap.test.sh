@@ -10,13 +10,6 @@
 # which no-mistakes version is on PATH.
 set -u
 
-# WINDOWS-DEFER: active dispatch-profile block mismatch on Windows; deferred to winport Phase 0-4 (triage pending). STRICT ADDITIVE - Linux/macOS still
-# run this test in full (ubuntu CI is the authoritative gate); it self-skips only on
-# native Windows, where this pre-existing substrate failure is not this PR's job.
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) echo "skip: WINDOWS-DEFER fm-bootstrap - active dispatch-profile block mismatch on Windows (winport Phase 0-4 (triage pending))"; exit 0 ;;
-esac
-
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -186,21 +179,43 @@ test_orca_backend_gates_orca_tool_only_when_selected() {
   pass "bootstrap: backend=orca gates the Orca CLI without requiring it on the default backend"
 }
 
-test_crew_dispatch_active_rules_are_surfaced() {
-  local case_dir fakebin out expect
-  case_dir="$TMP_ROOT/dispatch-active"
+run_crew_dispatch_active_rules_case() {
+  local platform case_name case_dir fakebin out expect
+  platform=$1
+  case_name=$2
+  case_dir="$TMP_ROOT/dispatch-active-$case_name"
   mkdir -p "$case_dir/home/config"
   printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
   printf '%s\n' '{"rules":[{"when":"fresh news","use":{"harness":"grok"},"why":"current context"},{"when":"big feature","use":{"harness":"codex","model":"gpt-5.5","effort":"high"}}],"default":{"harness":"claude","model":"haiku","effort":"low"}}' > "$case_dir/home/config/crew-dispatch.json"
   fakebin=$(make_fake_toolchain "$case_dir")
   add_real_jq "$fakebin"
 
-  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" FM_PLATFORM_IS_WINDOWS="$platform" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
 
-  expect=$'CREW_DISPATCH: active config/crew-dispatch.json\n  rule: fresh news -> grok\n  rule: big feature -> codex/gpt-5.5/high\n  default: claude/haiku/low'
-  [ "$out" = "$expect" ] || fail "active dispatch profile block mismatch"$'\n'"expected: $expect"$'\n'"actual:   $out"
-  pass "bootstrap surfaces active crew-dispatch rules and default"
+  if [ "$platform" = no ]; then
+    expect=$(PATH="$fakebin:$BASE_PATH" jq -r '
+      def profile($p):
+        ($p.harness | tostring)
+        + (if ($p.model? != null) then "/" + ($p.model | tostring)
+           elif ($p.effort? != null) then "/default"
+           else "" end)
+        + (if ($p.effort? != null) then "/" + ($p.effort | tostring) else "" end);
+      (["CREW_DISPATCH: active config/crew-dispatch.json"]
+        + [(.rules // [])[]? | "  rule: " + (.when | tostring) + " -> " + profile(.use)]
+        + (if (.default? | type) == "object" then ["  default: " + profile(.default)] else [] end))
+      | .[]
+    ' "$case_dir/home/config/crew-dispatch.json")
+  else
+    expect=$'CREW_DISPATCH: active config/crew-dispatch.json\n  rule: fresh news -> grok\n  rule: big feature -> codex/gpt-5.5/high\n  default: claude/haiku/low'
+  fi
+  [ "$out" = "$expect" ] || fail "active dispatch profile block mismatch ($case_name)"$'\n'"expected: $expect"$'\n'"actual:   $out"
+}
+
+test_crew_dispatch_active_rules_are_surfaced() {
+  run_crew_dispatch_active_rules_case no forced-posix
+  run_crew_dispatch_active_rules_case yes forced-windows
+  pass "bootstrap surfaces active crew-dispatch rules and default on forced POSIX and Windows paths"
 }
 
 test_crew_dispatch_validation() {
