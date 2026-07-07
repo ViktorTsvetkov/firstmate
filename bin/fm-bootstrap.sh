@@ -74,6 +74,41 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 
+materialize_windows_claude_md() {
+  fm_platform_is_windows || return 0
+
+  local agents claude tmp
+  agents="$FM_ROOT/AGENTS.md"
+  claude="$FM_ROOT/CLAUDE.md"
+  [ -f "$agents" ] || return 0
+
+  if [ -L "$claude" ]; then
+    return 0
+  fi
+  if [ -f "$claude" ] && cmp -s "$agents" "$claude"; then
+    return 0
+  fi
+  if [ -e "$claude" ] && [ ! -f "$claude" ]; then
+    echo "CLAUDE_MD: skipped: CLAUDE.md exists but is not a regular file or symlink"
+    return 0
+  fi
+
+  tmp="$FM_ROOT/.CLAUDE.md.materialize.$$"
+  rm -f "$tmp" 2>/dev/null || true
+  if ! ln "$agents" "$tmp" 2>/dev/null; then
+    cp "$agents" "$tmp" 2>/dev/null || {
+      rm -f "$tmp" 2>/dev/null || true
+      echo "CLAUDE_MD: failed: could not materialize CLAUDE.md from AGENTS.md"
+      return 0
+    }
+  fi
+  mv -f "$tmp" "$claude" 2>/dev/null || {
+    rm -f "$tmp" 2>/dev/null || true
+    echo "CLAUDE_MD: failed: could not replace broken CLAUDE.md"
+    return 0
+  }
+}
+
 fleet_sync() {
   if fm_platform_is_windows; then
     [ -f "$FM_ROOT/bin/fm-fleet-sync.sh" ] || return 0
@@ -429,6 +464,7 @@ fi
 if command -v no-mistakes >/dev/null 2>&1 && ! no_mistakes_compatible; then
   echo "MISSING: no-mistakes (install: $(install_cmd no-mistakes))"
 fi
+materialize_windows_claude_md
 gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
 # Worktree-tangle check: the firstmate primary checkout (FM_ROOT) must sit on its
 # default branch, not a feature branch (see fm-tangle-lib.sh). Scoped to the

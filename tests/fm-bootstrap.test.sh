@@ -179,6 +179,57 @@ test_orca_backend_gates_orca_tool_only_when_selected() {
   pass "bootstrap: backend=orca gates the Orca CLI without requiring it on the default backend"
 }
 
+test_windows_materializes_placeholder_claude_md() {
+  local case_dir root fakebin out
+  case_dir="$TMP_ROOT/claude-md-placeholder"
+  root="$case_dir/root"
+  mkdir -p "$root/config"
+  printf '%s\n' manual > "$root/config/backlog-backend"
+  printf '%s\n' 'full firstmate instructions' 'line two' > "$root/AGENTS.md"
+  printf '%s' 'AGENTS.md' > "$root/CLAUDE.md"
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$root" FM_ROOT_OVERRIDE="$root" FM_PLATFORM_IS_WINDOWS=yes \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+
+  [ -z "$out" ] || fail "Windows CLAUDE.md materialization should stay silent on success, got: $out"
+  cmp -s "$root/AGENTS.md" "$root/CLAUDE.md" || fail "CLAUDE.md was not materialized as an AGENTS.md mirror"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$root" FM_ROOT_OVERRIDE="$root" FM_PLATFORM_IS_WINDOWS=yes \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "Windows CLAUDE.md materialization should be idempotent, got: $out"
+  cmp -s "$root/AGENTS.md" "$root/CLAUDE.md" || fail "CLAUDE.md mirror changed after idempotent rerun"
+
+  pass "bootstrap materializes a native-Windows CLAUDE.md placeholder into an AGENTS.md mirror"
+}
+
+test_posix_leaves_valid_claude_md_symlink_untouched() {
+  local case_dir root fakebin out before after
+  case_dir="$TMP_ROOT/claude-md-posix"
+  root="$case_dir/root"
+  mkdir -p "$root/config"
+  printf '%s\n' manual > "$root/config/backlog-backend"
+  printf '%s\n' 'full firstmate instructions' > "$root/AGENTS.md"
+  ln -s AGENTS.md "$root/CLAUDE.md"
+  if [ ! -L "$root/CLAUDE.md" ]; then
+    pass "bootstrap forced-POSIX symlink test skipped because this host cannot create file symlinks"
+    return 0
+  fi
+  before=$(ls -l "$root/CLAUDE.md")
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$root" FM_ROOT_OVERRIDE="$root" FM_PLATFORM_IS_WINDOWS=no \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  after=$(ls -l "$root/CLAUDE.md")
+
+  [ -z "$out" ] || fail "forced-POSIX CLAUDE.md path should stay silent, got: $out"
+  [ -L "$root/CLAUDE.md" ] || fail "forced-POSIX bootstrap replaced a valid CLAUDE.md symlink"
+  [ "$(readlink "$root/CLAUDE.md")" = AGENTS.md ] || fail "forced-POSIX bootstrap changed the CLAUDE.md symlink target"
+  [ "$before" = "$after" ] || fail "forced-POSIX bootstrap changed the CLAUDE.md symlink bytes or metadata"
+
+  pass "bootstrap leaves a valid POSIX CLAUDE.md symlink untouched on the forced-POSIX path"
+}
+
 run_crew_dispatch_active_rules_case() {
   local platform case_name case_dir fakebin out expect
   platform=$1
@@ -251,5 +302,7 @@ ROWS
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_orca_backend_gates_orca_tool_only_when_selected
+test_windows_materializes_placeholder_claude_md
+test_posix_leaves_valid_claude_md_symlink_untouched
 test_crew_dispatch_active_rules_are_surfaced
 test_crew_dispatch_validation
