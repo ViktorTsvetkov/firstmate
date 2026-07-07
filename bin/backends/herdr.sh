@@ -705,10 +705,19 @@ fm_backend_herdr_composer_state() {  # <target> -> empty|pending|unknown
     '❯'|'>'|'$'|'%'|'#') printf 'empty'; return 0 ;;
   esac
   # Strip a leading prompt glyph before judging what remains.
-  case "$stripped" in
-    '❯ '*|'> '*|'$ '*|'% '*|'# '*) stripped=${stripped#??} ;;
-    '❯'*|'>'*|'$'*|'%'*|'#'*) stripped=${stripped#?} ;;
-  esac
+  if fm_platform_is_windows; then
+    # msys2 bash ${x#??} is byte-oriented and mangles the multibyte prompt glyph;
+    # strip the exact literal prompt prefix instead.
+    case "$stripped" in
+      '❯ '*) stripped=${stripped#'❯ '} ;; '> '*) stripped=${stripped#'> '} ;; '$ '*) stripped=${stripped#'$ '} ;; '% '*) stripped=${stripped#'% '} ;; '# '*) stripped=${stripped#'# '} ;;
+      '❯'*) stripped=${stripped#'❯'} ;; '>'*) stripped=${stripped#'>'} ;; '$'*) stripped=${stripped#'$'} ;; '%'*) stripped=${stripped#'%'} ;; '#'*) stripped=${stripped#'#'} ;;
+    esac
+  else
+    case "$stripped" in
+      '❯ '*|'> '*|'$ '*|'% '*|'# '*) stripped=${stripped#??} ;;
+      '❯'*|'>'*|'$'*|'%'*|'#'*) stripped=${stripped#?} ;;
+    esac
+  fi
   stripped="${stripped#"${stripped%%[![:space:]]*}"}"
   stripped="${stripped%"${stripped##*[![:space:]]}"}"
   [ -n "$stripped" ] || { printf 'empty'; return 0; }
