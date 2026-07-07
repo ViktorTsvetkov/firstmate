@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Acquire or inspect the per-home firstmate session lock.
-# Writes the harness (agent) process PID found by walking the shell's ancestry,
-# which lives as long as the firstmate session - unlike the transient subshell
-# PID of any one tool call, which is dead moments after it is written.
+# Writes the harness (agent) process PID found by walking the shell's ancestry.
+# On native Windows under herdr, where Git Bash tool commands may lose that
+# ancestry, falls back to the herdr pane's live process-group leader and records
+# state/.lock.herdr metadata for later stale-lock verification.
 # Usage: fm-lock.sh           acquire; exit 1 if another live session holds it
 #        fm-lock.sh status    print holder and liveness; always exits 0
 set -u

@@ -75,6 +75,16 @@ It intentionally mirrors the behavior-test baseline in [`.github/workflows/ci.ym
 
 Personal preferences for one captain's fleet live locally in `data/captain.md`; it is gitignored and printed in the session-start context digest after `data/projects.md` and optional `data/secondmates.md`.
 
+## Session lock state
+
+`bin/fm-session-start.sh` acquires the per-home session lock through `bin/fm-lock.sh` before any mutating session-start step.
+The primary lock file is local, gitignored `state/.lock` and contains the PID firstmate will use to decide whether another live harness already owns that home.
+On POSIX and normal process trees, `fm-lock.sh` finds that PID by walking from the current shell to the owning harness command.
+On native Windows under Herdr, Git Bash tool commands can report `PPID=1`, so the ancestry walk may not reach the harness.
+In that shape, when `HERDR_ENV=1`, `HERDR_PANE_ID` is present, and `herdr agent get` confirms the pane is still attached to a verified harness, `fm-lock.sh` records the live MSYS process-group leader instead.
+It also writes `state/.lock.herdr` with `pid=`, `session=`, `pane=`, and `agent=` so future `status` and stale-lock checks verify the same Herdr session, pane, and harness before treating the PID as live.
+That sidecar is authoritative for native-Windows Herdr locks; if the live Herdr agent no longer matches it, generic process-name liveness is not allowed to keep the lock.
+
 ## Operational learnings (data/learnings.md)
 
 Fleet-local operational facts and gotchas live locally in `data/learnings.md`; it is gitignored and printed right after `data/captain.md` in the session-start context digest.
