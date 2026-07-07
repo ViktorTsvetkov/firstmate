@@ -394,10 +394,13 @@ On Windows, `fm_backend_herdr_current_path` therefore submits a marked `pwd` pro
 POSIX keeps the passive `foreground_cwd` read and normalizes that value with `cygpath -u` only when the Windows branch is active.
 - **A trailing carriage return is stripped from every value read back from herdr.** `fm_backend_herdr_windows_strip_cr` runs `tr -d '\r'` on Windows and passes through (`cat`) on POSIX. Because Windows-native herdr emits CRLF, a trailing `\r` would otherwise taint every jq-extracted value the adapter compares or returns - protocol/version gate, server-running poll, default-tab prune label/agent-status checks, pane-agent-state round-trips and error-code compares, `parse_target`'s session/pane split, bounded `capture` and composer-state reads, busy-state, `pane_for_tab`, and `list_live`'s tab id/label - breaking exact-string compares such as `[ "$status" = working ]` and polluting captured pane text, returned targets, and paths. The strip is applied to each such value before it is compared or emitted.
 - **The headless server is launched detached via `nohup`.** `fm_backend_herdr_server_start` starts the server through `nohup bash -c '... herdr server ...' & disown` on Windows, where the POSIX `( ... & )` backgrounded-subshell form does not reliably survive; POSIX keeps the exact pre-existing subshell launch.
+- **An empty native-Windows session is released after the last task pane closes.** Verified on 2026-07-08 against herdr `0.7.1-preview.2026-06-30-3459798b606d`: `pane close` removed the task tab but left `herdr.exe server --session <name>` alive, and `session stop/delete` could report the isolated session stopped while that process still remained.
+  `fm_backend_herdr_kill` now checks the scoped workspace count after closing the pane; when it is zero on Windows, it stops and deletes that exact named session, then reaps only a stubborn `herdr.exe server --session <same-name>` process.
+  POSIX does none of this extra release work, and Windows never releases a session that still has workspaces.
 - **The composer's leading prompt glyph is stripped as a literal fixed string.** `fm_backend_herdr_composer_state`'s prompt-glyph strip uses `${stripped#'❯ '}`-style exact-prefix removals on Windows, because msys2/Git-Bash bash's byte-oriented `${x#??}`/`${x#?}` parameter expansions mangle the 3-byte prompt glyph U+276F (`❯`) and would misclassify the empty-composer ghost placeholder as pending. POSIX keeps the original byte-count `${x#??}`/`${x#?}` expansions; the ASCII prompts (`>`, `$`, `%`, `#`) are handled on both paths.
 
 On POSIX every conversion is a no-op: no `cygpath` is invoked (the cwd and the resolved shell path are passed through untouched), the CR strip is an identity passthrough, the composer prompt-glyph strip is the original byte-count parameter expansion, and the server launch is the original backgrounded subshell.
-This Windows handling is covered by fake-CLI unit tests (`tests/fm-backend-herdr.test.sh`'s `test_windows_*`/`test_posix_*` pairs, which assert the Windows branch calls `cygpath`/`nohup` and strips CR from each value it compares or returns, and that the POSIX branch never does and stays byte-identical - including that a POSIX empty `foreground_cwd` emits no bytes) and by `tests/fm-backend-herdr-handoff.test.sh`.
+This Windows handling is covered by fake-CLI unit tests (`tests/fm-backend-herdr.test.sh`'s `test_windows_*`/`test_posix_*` pairs, which assert the Windows branch calls `cygpath`/`nohup` and strips CR from each value it compares or returns, and that the POSIX branch never does and stays byte-identical - including that a POSIX empty `foreground_cwd` emits no bytes), by `tests/fm-backend-herdr-handoff.test.sh`, and by `tests/fm-backend-herdr-release.test.sh` for the empty-session release path.
 
 ### Native Windows handoff verification (2026-07-07)
 
@@ -447,6 +450,21 @@ sidecar=pid=19775;session=fm-lock-liveclaude4-19703;pane=w1:p2;agent=claude;
 ```
 
 That proves a herdr-launched Claude tool command can acquire the firstmate session lock on native Windows after the ancestry walk fails, while preserving a live PID plus herdr session/pane/agent metadata for stale-lock checks.
+
+### Native Windows afk and process-release verification (2026-07-08)
+
+Verified on native Windows Git Bash against real herdr `0.7.1-preview.2026-06-30-3459798b606d` with an isolated `HERDR_SESSION=fm-afk-liveverify-<pid>`.
+The live script created a real herdr supervisor pane, started `bin/fm-supervise-daemon.sh` with `FM_SUPERVISOR_BACKEND=herdr`, set `.afk`, wrote a delayed `needs-decision:` status event, waited for the daemon to inject the escalation digest, simulated the captain's unmarked return through `should_exit_afk`, cleared `.afk`, stopped the daemon, closed the panes, and ran guarded session cleanup.
+The exact observed output was:
+
+```text
+before_count=0
+escalation_delivered=injection
+return_cleared_afk=yes
+after_count=0
+```
+
+That proves the native-Windows herdr away-mode path delivered an escalation, recognized an unmarked return and cleared away mode, and returned `herdr.exe` process count to the original baseline after teardown.
 
 ## Known gaps and follow-up notes
 

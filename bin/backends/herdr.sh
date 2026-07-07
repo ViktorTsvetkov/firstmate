@@ -138,6 +138,42 @@ fm_backend_herdr_server_start() {  # <session>
   ( fm_backend_herdr_cli "$session" server >/dev/null 2>&1 & ) || return 1
 }
 
+fm_backend_herdr_workspace_count() {  # <session>
+  local session=$1 out count
+  out=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 1
+  count=$(printf '%s' "$out" | jq -r '.result.workspaces? // [] | length' 2>/dev/null)
+  count=$(printf '%s' "$count" | fm_backend_herdr_windows_strip_cr)
+  case "$count" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$count"
+}
+
+fm_backend_herdr_windows_kill_server_processes() {  # <session>
+  local session=$1
+  fm_platform_is_windows || return 0
+  [ -n "$session" ] || return 0
+  # shellcheck disable=SC2016 # The embedded PowerShell expands its own variables.
+  FM_HERDR_RELEASE_SESSION="$session" powershell.exe -NoProfile -Command '
+$Session = $env:FM_HERDR_RELEASE_SESSION
+$escaped = [regex]::Escape($Session)
+$pattern = "(?i)herdr\.exe\s+server\s+--session\s+$escaped(\s|$)"
+Get-CimInstance Win32_Process -Filter "name = '\''herdr.exe'\''" |
+  Where-Object { $_.CommandLine -match $pattern } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+' >/dev/null 2>&1 || true
+}
+
+fm_backend_herdr_release_session_if_empty() {  # <session>
+  local session=$1 count
+  fm_platform_is_windows || return 0
+  [ -n "$session" ] || return 0
+  count=$(fm_backend_herdr_workspace_count "$session" 2>/dev/null || true)
+  [ "$count" = 0 ] || return 0
+  herdr session stop "$session" --session "$session" --json >/dev/null 2>&1 || true
+  sleep 0.5
+  herdr session delete "$session" --session "$session" --json >/dev/null 2>&1 || true
+  fm_backend_herdr_windows_kill_server_processes "$session"
+}
+
 # fm_backend_herdr_tool_check: refuse loudly if herdr or jq is missing.
 fm_backend_herdr_tool_check() {
   command -v herdr >/dev/null 2>&1 || { echo "error: backend=herdr selected but the 'herdr' CLI is not installed (https://herdr.dev) (dual-licensed AGPL-3.0-or-later/commercial)" >&2; return 1; }
@@ -822,6 +858,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
 fm_backend_herdr_kill() {  # <target>
   fm_backend_herdr_target_ready "$1" || return 0
   fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane close "$FM_BACKEND_HERDR_PANE" >/dev/null 2>&1 || true
+  fm_backend_herdr_release_session_if_empty "$FM_BACKEND_HERDR_SESSION"
 }
 
 # fm_backend_herdr_busy_state: semantic busy state from herdr's native

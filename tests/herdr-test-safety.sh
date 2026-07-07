@@ -63,6 +63,28 @@ herdr_refuse_if_default() {  # <name>
   return 1
 }
 
+# herdr_windows_kill_stubborn_server_processes: native-Windows fallback for a
+# verified herdr 0.7.1 leak where `session stop/delete` can mark an isolated
+# session stopped while leaving its `herdr.exe server --session <name>` process
+# alive. This is exact-session cleanup for throwaway test sessions only.
+herdr_windows_kill_stubborn_server_processes() {  # <name>
+  local name=$1
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) ;;
+    *) return 0 ;;
+  esac
+  [ -n "$name" ] && [ "$name" != default ] || return 0
+  # shellcheck disable=SC2016 # The embedded PowerShell expands its own variables.
+  FM_HERDR_RELEASE_SESSION="$name" powershell.exe -NoProfile -Command '
+$Session = $env:FM_HERDR_RELEASE_SESSION
+$escaped = [regex]::Escape($Session)
+$pattern = "(?i)herdr\.exe\s+server\s+--session\s+$escaped(\s|$)"
+Get-CimInstance Win32_Process -Filter "name = '\''herdr.exe'\''" |
+  Where-Object { $_.CommandLine -match $pattern } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+' >/dev/null 2>&1 || true
+}
+
 # herdr_safe_stop_and_delete: the ONLY sanctioned way for a test to tear down
 # an isolated session it created. Guards first (herdr_refuse_if_default), then
 # uses the explicit-by-name `session stop`/`session delete` forms (never the
@@ -76,6 +98,8 @@ herdr_safe_stop_and_delete() {  # <name>
   herdr_refuse_if_default "$name" || return 1
   herdr session stop "$name" --session "$name" --json >/dev/null 2>&1 || true
   sleep 0.5
+  herdr_windows_kill_stubborn_server_processes "$name"
   herdr_refuse_if_default "$name" || return 1
   herdr session delete "$name" --session "$name" --json >/dev/null 2>&1 || true
+  herdr_windows_kill_stubborn_server_processes "$name"
 }
