@@ -66,7 +66,7 @@ Crewmate validation follows the installed no-mistakes version's SKILL.md and liv
 Firstmate's wrapper still matters: `ask-user` findings route to the captain through firstmate, and crewmates avoid `--yes` because it silently resolves captain-owned decisions without escalation.
 Local `.no-mistakes/` state and test evidence stay out of this repo; `.no-mistakes.yaml` keeps evidence in a temp directory and pins the gate's test command to the same bash behavior suite as CI.
 On native Windows the same command runs through a batch/Git Bash dispatch path so no-mistakes does not accidentally pick WSL bash for a Windows worktree.
-Windows-only deferred gaps are annotated in the affected tests with `WINDOWS-DEFER`; they self-skip only on native Windows, while Linux CI still runs the full suite.
+Windows-only deferred gaps are annotated in the affected tests with `WINDOWS-DEFER`; they self-skip only on native Windows, while Linux CI runs the full suite and a separate `windows-latest` Git Bash leg runs the curated subset that is empirically green there.
 That is firstmate-specific; do not commit `.no-mistakes/evidence/` here even when another no-mistakes-managed target project keeps committed PR evidence.
 
 Check and test the toolbelt before pushing:

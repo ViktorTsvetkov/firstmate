@@ -46,6 +46,69 @@ jobs:
             "$test_script"
           done
 
+  windows-tests:
+    name: Git Bash behavior tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Run Windows Git Bash subset
+        run: |
+          set -eu
+          # Empirically green under Git Bash on Windows as of Phase 1.
+          # Deferred from this leg: fm-backend, fm-backend-herdr, fm-backend-orca,
+          # fm-secondmate-lifecycle-e2e, fm-secondmate-safety, fm-teardown, and
+          # fm-watcher-lock (windows-latest singleton timing failure).
+          tests=(
+            tests/fm-afk-inject-e2e.test.sh
+            tests/fm-afk-inject-herdr-e2e.test.sh
+            tests/fm-backend-autodetect-smoke.test.sh
+            tests/fm-backend-cmux.test.sh
+            tests/fm-backend-cmux-smoke.test.sh
+            tests/fm-backend-herdr-prune-safety-e2e.test.sh
+            tests/fm-backend-herdr-respawn-idem-e2e.test.sh
+            tests/fm-backend-herdr-smoke.test.sh
+            tests/fm-backend-herdr-workspace-per-home-e2e.test.sh
+            tests/fm-backend-tmux-smoke.test.sh
+            tests/fm-backend-zellij.test.sh
+            tests/fm-backend-zellij-smoke.test.sh
+            tests/fm-bootstrap.test.sh
+            tests/fm-brief.test.sh
+            tests/fm-composer-ghost.test.sh
+            tests/fm-crew-state.test.sh
+            tests/fm-daemon.test.sh
+            tests/fm-fleet-sync.test.sh
+            tests/fm-gotmp.test.sh
+            tests/fm-grok-harness.test.sh
+            tests/fm-platform-lib.test.sh
+            tests/fm-pr-merge.test.sh
+            tests/fm-review-diff.test.sh
+            tests/fm-secondmate-harness.test.sh
+            tests/fm-secondmate-sync.test.sh
+            tests/fm-send-popup-settle.test.sh
+            tests/fm-send-secondmate-marker.test.sh
+            tests/fm-send-settle.test.sh
+            tests/fm-session-start.test.sh
+            tests/fm-spawn-batch.test.sh
+            tests/fm-spawn-dispatch-profile.test.sh
+            tests/fm-tangle-guard.test.sh
+            tests/fm-test-runner-windows.test.sh
+            tests/fm-turnend-guard.test.sh
+            tests/fm-update.test.sh
+            tests/fm-wake-daemon-lifecycle-e2e.test.sh
+            tests/fm-wake-queue.test.sh
+            tests/fm-watch-triage.test.sh
+            tests/fm-x-mode.test.sh
+          )
+          for test_script in "${tests[@]}"; do
+            bash "$test_script"
+          done
+
   invariants:
     name: Repo invariants
     runs-on: ubuntu-latest

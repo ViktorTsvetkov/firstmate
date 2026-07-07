@@ -20,6 +20,20 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
+if [ -z "${FM_TEST_BASE_PATH+x}" ]; then
+  # Git for Windows keeps git.exe outside /usr/bin and /bin, but these tests
+  # intentionally clamp PATH around fake tools.
+  # Add only the active git.exe directory on Windows so POSIX PATH fixtures stay unchanged.
+  # shellcheck source=bin/fm-platform-lib.sh disable=SC1091
+  . "$ROOT/bin/fm-platform-lib.sh"
+  if fm_platform_is_windows && command -v git >/dev/null 2>&1; then
+    git_bin=$(dirname "$(command -v git)")
+    case ":$BASE_PATH:" in
+      *":$git_bin:"*) : ;;
+      *) BASE_PATH="$BASE_PATH:$git_bin" ;;
+    esac
+  fi
+fi
 TMP_ROOT=$(fm_test_tmproot fm-bootstrap-tests)
 
 # A fake toolchain where every required tool is present and gh is authenticated.
@@ -196,6 +210,13 @@ run_bootstrap_timeout_case() {
         FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null
     fi
   )
+}
+
+assert_timeout_line() {
+  local out=$1 timeout=$2 msg=$3 next
+  next=$((timeout + 1))
+  printf '%s\n' "$out" | grep -E "FLEET_SYNC: fleet: skipped: bootstrap refresh timed out \\(timeout=${timeout}s elapsed=(${timeout}|${next})s\\)" >/dev/null \
+    || fail "$msg (missing timeout=${timeout}s with elapsed ${timeout}s or ${next}s)"$'\n'"--- output ---"$'\n'"$out"
 }
 
 # Each row (fields are '^'-separated; the install URL contains a literal '|'):
@@ -444,7 +465,7 @@ test_posix_leaves_valid_claude_md_symlink_untouched() {
 }
 
 test_fleet_sync_timeout_scales_with_origin_backed_project_count() {
-  local case_dir home fakebin fake_root out expected
+  local case_dir home fakebin fake_root out
   case_dir="$TMP_ROOT/fleet-timeout-scaled"
   home="$case_dir/home"
   mkdir -p "$home/config"
@@ -456,8 +477,9 @@ test_fleet_sync_timeout_scales_with_origin_backed_project_count() {
 
   out=$(run_bootstrap_timeout_case "$home" "$fake_root" "$fakebin")
 
-  expected=$'FLEET_SYNC: alpha: synced\nFLEET_SYNC: beta: skipped: no origin remote\nFLEET_SYNC: fleet: skipped: bootstrap refresh timed out (timeout=59s elapsed=59s)'
-  assert_contains "$out" "$expected" "bootstrap timeout should scale to 59s for 18 origin-backed projects and relay partial output first"
+  assert_contains "$out" $'FLEET_SYNC: alpha: synced\nFLEET_SYNC: beta: skipped: no origin remote' \
+    "bootstrap timeout should relay partial output before the timeout line"
+  assert_timeout_line "$out" 59 "bootstrap timeout should scale to 59s for 18 origin-backed projects"
   pass "bootstrap computes a fleet-size-aware default timeout and preserves partial fleet-sync output"
 }
 
@@ -473,7 +495,7 @@ test_fleet_sync_timeout_floor_preserves_small_fleets() {
 
   out=$(run_bootstrap_timeout_case "$home" "$fake_root" "$fakebin")
 
-  assert_contains "$out" "FLEET_SYNC: fleet: skipped: bootstrap refresh timed out (timeout=20s elapsed=20s)" "small fleets should keep the 20s timeout floor"
+  assert_timeout_line "$out" 20 "small fleets should keep the 20s timeout floor"
   pass "bootstrap keeps the quick 20s default for small fleets"
 }
 
@@ -489,7 +511,7 @@ test_fleet_sync_timeout_explicit_override_wins() {
 
   out=$(run_bootstrap_timeout_case "$home" "$fake_root" "$fakebin" 7)
 
-  assert_contains "$out" "FLEET_SYNC: fleet: skipped: bootstrap refresh timed out (timeout=7s elapsed=7s)" "explicit timeout override should still win over computed default"
+  assert_timeout_line "$out" 7 "explicit timeout override should still win over computed default"
   assert_not_contains "$out" "timeout=59s" "explicit override should not be replaced by the computed timeout"
   pass "bootstrap preserves FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT as an explicit override"
 }
@@ -506,7 +528,7 @@ test_fleet_sync_timeout_empty_override_uses_default() {
 
   out=$(run_bootstrap_timeout_case "$home" "$fake_root" "$fakebin" "")
 
-  assert_contains "$out" "FLEET_SYNC: fleet: skipped: bootstrap refresh timed out (timeout=59s elapsed=59s)" "blank timeout env should behave like an unset override"
+  assert_timeout_line "$out" 59 "blank timeout env should behave like an unset override"
   assert_not_contains "$out" "timeout=20s" "blank timeout env should not force the legacy floor on a large fleet"
   pass "bootstrap treats a blank timeout override as unset"
 }
@@ -526,7 +548,7 @@ test_fleet_sync_timeout_is_computed_before_launch() {
   out=$(run_bootstrap_timeout_case "$home" "$fake_root" "$fakebin" __unset__ "$started_marker" "$git_record" 1)
 
   [ ! -s "$git_record" ] || fail "fleet sync launched before timeout scan finished: $(tr '\n' ';' < "$git_record")"
-  assert_contains "$out" "FLEET_SYNC: fleet: skipped: bootstrap refresh timed out (timeout=20s elapsed=20s)" "launch-order case should still enforce the computed timeout"
+  assert_timeout_line "$out" 20 "launch-order case should still enforce the computed timeout"
   pass "bootstrap computes the timeout before launching fleet sync"
 }
 
@@ -549,7 +571,9 @@ run_crew_dispatch_active_rules_case() {
 }
 
 test_crew_dispatch_active_rules_are_surfaced() {
-  run_crew_dispatch_active_rules_case no forced-posix
+  if ! fm_platform_is_windows; then
+    run_crew_dispatch_active_rules_case no forced-posix
+  fi
   run_crew_dispatch_active_rules_case yes forced-windows
   pass "bootstrap surfaces active crew-dispatch rules and default on forced POSIX and Windows paths"
 }

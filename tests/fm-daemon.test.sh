@@ -1397,6 +1397,12 @@ test_inject_wedge_alarm_fires_active_alert_on_non_tmux_backend() {
 
 test_inject_wedge_alarm_throttles_when_marker_cannot_be_written() {
   local dir state log daemon_log alerts errors
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+      echo "skip: WINDOWS-DEFER fm-daemon unwritable marker throttle - chmod u-w is not a reliable directory write denial on Git Bash/NTFS (winport Phase 0-4 (triage pending))"
+      return 0
+      ;;
+  esac
   dir=$(make_wedge_case wedge-unwritable-marker)
   state="$dir/state"; log="$dir/alert.log"; daemon_log="$dir/daemon.log"
   escalate_add "$state" "needs-decision: pick A"
