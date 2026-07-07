@@ -584,6 +584,12 @@ test_capture_strips_windows_jq_crlf() {
 }
 
 test_capture_forced_posix_preserves_jq_crlf() {
+  # WINDOWS-DEFER: native Windows jq does text-mode CRLF translation on stdout; STRICT ADDITIVE - Linux/macOS/WSL still run this assertion in full, with ubuntu CI as the authoritative POSIX gate.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      echo "skip: WINDOWS-DEFER fm_backend_cmux_capture forced-POSIX exact-jq-CRLF - asserts POSIX-jq byte output, but native Windows jq does text-mode CRLF translation; POSIX byte-preservation stays enforced on ubuntu+WSL"
+      return 0 ;;
+  esac
   local dir fb out
   dir="$TMP_ROOT/capture-posix-crlf"; mkdir -p "$dir/responses"
   cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
