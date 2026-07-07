@@ -177,7 +177,7 @@ Herdr tasks additionally record:
 | Operation | Verified herdr call | What was verified |
 |---|---|---|
 | Version/protocol gate | `herdr status --json` -> `.client.protocol` | Session-independent; `.server.*` fields ARE session-dependent. |
-| Headless server start | `HERDR_SESSION=<name> herdr server --session <name>` (backgrounded) | A bare socket call does NOT auto-start the server; the adapter always starts-then-polls before any workspace/tab/pane call. This fact is for start only, not cleanup, and the explicit `--session` flag is intentional because `HERDR_SESSION` alone is not safe session targeting. |
+| Headless server start | `HERDR_SESSION=<name> herdr server --session <name>` (backgrounded on POSIX; `nohup`-detached on native Windows - see "Native Windows path handling" below) | A bare socket call does NOT auto-start the server; the adapter always starts-then-polls before any workspace/tab/pane call. This fact is for start only, not cleanup, and the explicit `--session` flag is intentional because `HERDR_SESSION` alone is not safe session targeting. |
 | Duplicate task check | `herdr tab list --workspace <id>`, match by `.label` | Herdr does NOT enforce tab-label uniqueness itself; two tabs can share a label. The adapter's own duplicate check is required. |
 | Send literal (unsubmitted) | `herdr pane send-text <pane> <text>` | Does NOT auto-submit, contrary to the original design addendum's guess. Verified directly: a unique marker sent this way sits unexecuted in the composer until a separate Enter. Behaves exactly like tmux's `send-keys -l`. |
 | Send + submit atomically | `herdr pane run <pane> <command>` | Runs and submits a command in one call; used for the two fixed spawn-time commands (`treehouse get`, the `GOTMPDIR` export) exactly where tmux used one `send-keys ... Enter` call. |
@@ -369,6 +369,18 @@ Building that test surfaced one more real finding worth recording for anyone wri
 A composer redraw that trusts `tput cols` for its own line-wrapping math can therefore silently overflow the pane's real width and wrap across two terminal rows - breaking the structural single-row border classifier's assumption (the digest looked "concatenated with itself" because the guard never fired: the composer read `unknown` instead of `pending`, so the busy/composer guard did not defer a second attempt).
 The test's composer script works around this with a hardcoded conservative width rather than trusting `tput cols` in this execution context.
 This is a test-harness-only concern - `fm_backend_herdr_composer_state` and `fm_backend_herdr_send_text_submit` themselves are unchanged and were reverified correct once the test's own composer script stayed within the pane's real width - but it is a sharp edge for any future herdr-launched interactive script that computes its own layout from `tput`.
+
+## Native Windows (Git Bash) path handling
+
+The real-binary verification above was all on macOS aarch64, but the adapter also runs on native Windows under Git Bash, where herdr is a Windows-native process that speaks Windows-form paths while the surrounding bash speaks POSIX (`/c/...`) paths.
+Three narrow, additive conversions bridge that gap, each gated on `fm_platform_is_windows` (`bin/fm-platform-lib.sh`) so the POSIX path is byte-for-byte unchanged:
+
+- **`--cwd` out to herdr is converted with `cygpath -w`.** `fm_backend_herdr_cwd_arg` translates the POSIX `--cwd` to its Windows form before every `workspace create` and `tab create`, so Windows-native herdr lands the workspace/tab in the intended directory instead of misreading a `/c/...` string.
+- **`foreground_cwd` back from herdr is normalized with `cygpath -u`.** `fm_backend_herdr_current_path` converts the pane's live `foreground_cwd` back to POSIX form, so `fm-spawn.sh`'s worktree-discovery poll compares like-for-like against its own POSIX `PROJ_ABS`/worktree path instead of false-mismatching a Windows-form string.
+- **The headless server is launched detached via `nohup`.** `fm_backend_herdr_server_start` starts the server through `nohup bash -c '... herdr server ...' & disown` on Windows, where the POSIX `( ... & )` backgrounded-subshell form does not reliably survive; POSIX keeps the exact pre-existing subshell launch.
+
+On POSIX every branch is a no-op: no `cygpath` is invoked, the cwd is passed through untouched, and the server launch is the original backgrounded subshell.
+This Windows handling is covered by fake-CLI unit tests (`tests/fm-backend-herdr.test.sh`'s `test_windows_*`/`test_posix_*` pairs, which assert the Windows branch calls `cygpath`/`nohup` and the POSIX branch never does and stays byte-identical); it has not yet been verified against a real Windows herdr binary.
 
 ## Known gaps and follow-up notes
 

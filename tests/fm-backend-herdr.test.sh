@@ -62,6 +62,58 @@ SH
   printf '%s\n' "$fb"
 }
 
+add_cygpath_fake() {  # <fakebin>
+  local fb=$1
+  cat > "$fb/cygpath" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf 'cygpath' >> "${FM_CYGPATH_LOG:?}"
+for a in "$@"; do printf '\x1f%s' "$a" >> "$FM_CYGPATH_LOG"; done
+printf '\n' >> "$FM_CYGPATH_LOG"
+case "${1:-}" in
+  -w)
+    case "${2:-}" in
+      /c/Users/captain/project) printf 'C:\\Users\\captain\\project\n' ;;
+      /c/Users/captain/worktree) printf 'C:\\Users\\captain\\worktree\n' ;;
+      *) printf '%s\n' "${2:-}" ;;
+    esac
+    ;;
+  -u)
+    case "${2:-}" in
+      'C:\Users\captain\worktree') printf '/c/Users/captain/worktree\n' ;;
+      *) printf '%s\n' "${2:-}" ;;
+    esac
+    ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fb/cygpath"
+}
+
+add_nohup_fake() {  # <fakebin>
+  local fb=$1
+  cat > "$fb/nohup" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf 'nohup' >> "${FM_NOHUP_LOG:?}"
+for a in "$@"; do printf '\x1f%s' "$a" >> "$FM_NOHUP_LOG"; done
+printf '\n' >> "$FM_NOHUP_LOG"
+exec "$@"
+SH
+  chmod +x "$fb/nohup"
+}
+
+wait_for_log_contains() {  # <log> <pattern>
+  local log=$1 pattern=$2 i
+  for i in $(seq 1 50); do
+    if [ -f "$log" ] && grep -Fq "$pattern" "$log"; then
+      return 0
+    fi
+    sleep 0.02
+  done
+  return 1
+}
+
 # make_herdr_statefake: a STATEFUL `herdr` stub that models the parts of herdr's
 # real container behavior the workspace-leak fix (and the default-tab-prune
 # safety fix) depend on, so a full spawn->teardown cycle can be replayed
@@ -286,6 +338,36 @@ test_cli_helper_sets_env_and_appends_trailing_session_flag() {
   assert_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''list'$'\x1f''--session'$'\x1f''fmtest' \
     "fm_backend_herdr_cli did not append a trailing --session <name> flag (the fix for the env-var-alone routing bug)"
   pass "fm_backend_herdr_cli: sets HERDR_SESSION AND appends a trailing --session flag on every call"
+}
+
+test_windows_server_start_uses_detached_launch() {
+  local dir log resp fb nohup_log
+  dir="$TMP_ROOT/server-start-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; nohup_log="$dir/nohup.log"; : > "$log"; : > "$nohup_log"
+  fb=$(make_herdr_fakebin "$dir")
+  add_nohup_fake "$fb"
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_NOHUP_LOG="$nohup_log" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_start fmtest' "$ROOT"
+  expect_code 0 $? "Windows server_start should succeed"
+  wait_for_log_contains "$nohup_log" "nohup" || fail "Windows server_start did not use nohup for detached launch"
+  wait_for_log_contains "$log" "HERDR_SESSION=fmtest" || fail "Windows server_start did not run herdr server"
+  assert_contains "$(cat "$log")" "HERDR_SESSION=fmtest"$'\x1f''server'$'\x1f''--session'$'\x1f''fmtest' \
+    "Windows server_start did not launch herdr server with the requested session"
+  pass "fm_backend_herdr_server_start: Windows branch launches through a detached nohup path"
+}
+
+test_posix_server_start_keeps_existing_subshell_launch() {
+  local dir log resp fb nohup_log
+  dir="$TMP_ROOT/server-start-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; nohup_log="$dir/nohup.log"; : > "$log"; : > "$nohup_log"
+  fb=$(make_herdr_fakebin "$dir")
+  add_nohup_fake "$fb"
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_NOHUP_LOG="$nohup_log" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_start fmtest' "$ROOT"
+  expect_code 0 $? "POSIX server_start should succeed"
+  wait_for_log_contains "$log" "HERDR_SESSION=fmtest" || fail "POSIX server_start did not run herdr server"
+  [ ! -s "$nohup_log" ] || fail "POSIX server_start must not use the detached nohup path; log: $(cat "$nohup_log")"
+  assert_contains "$(cat "$log")" "HERDR_SESSION=fmtest"$'\x1f''server'$'\x1f''--session'$'\x1f''fmtest' \
+    "POSIX server_start did not preserve the existing herdr server invocation"
+  pass "fm_backend_herdr_server_start: POSIX branch keeps the existing backgrounded subshell launch and never calls nohup"
 }
 
 # --- container_ensure / create_task ------------------------------------------
@@ -622,6 +704,76 @@ test_create_task_creates_with_no_focus_flag() {
   pass "fm_backend_herdr_create_task: tab create passes --no-focus"
 }
 
+test_windows_container_ensure_converts_cwd_for_workspace_create() {
+  local dir log resp fb out cyglog
+  dir="$TMP_ROOT/container-windows-cwd"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; cyglog="$dir/cygpath.log"; : > "$log"; : > "$cyglog"
+  printf '{"client":{"version":"0.7.1","protocol":14}}\n' > "$resp/1.out"
+  printf '{"server":{"running":true}}\n' > "$resp/2.out"
+  printf '{"result":{"workspaces":[]}}\n' > "$resp/3.out"
+  printf '{"result":{"workspace":{"workspace_id":"w1","label":"firstmate"},"tab":{"tab_id":"w1:t1"},"root_pane":{"pane_id":"w1:p1"}}}\n' > "$resp/4.out"
+  fb=$(make_herdr_fakebin "$dir")
+  add_cygpath_fake "$fb"
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 FM_CYGPATH_LOG="$cyglog" HERDR_SESSION=fmtest \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /c/Users/captain/project' "$ROOT" )
+  [ "$out" = $'fmtest:w1\tw1:t1' ] || fail "container_ensure should still echo '<session>:<workspace_id>\\t<seeded_default_tab_id>', got '$out'"
+  assert_contains "$(cat "$cyglog")" $'cygpath\x1f-w\x1f/c/Users/captain/project' \
+    "Windows workspace create path branch did not call cygpath -w"
+  assert_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''create'$'\x1f''--cwd'$'\x1f''C:\Users\captain\project'$'\x1f''--label'$'\x1f''firstmate' \
+    "Windows workspace create did not pass a Windows-form --cwd to herdr"
+  pass "fm_backend_herdr_container_ensure: Windows branch converts workspace --cwd with cygpath -w"
+}
+
+test_posix_container_ensure_leaves_workspace_cwd_byte_identical() {
+  local dir log resp fb out cyglog
+  dir="$TMP_ROOT/container-posix-cwd"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; cyglog="$dir/cygpath.log"; : > "$log"; : > "$cyglog"
+  printf '{"client":{"version":"0.7.1","protocol":14}}\n' > "$resp/1.out"
+  printf '{"server":{"running":true}}\n' > "$resp/2.out"
+  printf '{"result":{"workspaces":[]}}\n' > "$resp/3.out"
+  printf '{"result":{"workspace":{"workspace_id":"w1","label":"firstmate"},"tab":{"tab_id":"w1:t1"},"root_pane":{"pane_id":"w1:p1"}}}\n' > "$resp/4.out"
+  fb=$(make_herdr_fakebin "$dir")
+  add_cygpath_fake "$fb"
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 FM_CYGPATH_LOG="$cyglog" HERDR_SESSION=fmtest \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /c/Users/captain/project' "$ROOT" )
+  [ "$out" = $'fmtest:w1\tw1:t1' ] || fail "container_ensure should still echo '<session>:<workspace_id>\\t<seeded_default_tab_id>', got '$out'"
+  [ ! -s "$cyglog" ] || fail "POSIX workspace create branch must not call cygpath; log: $(cat "$cyglog")"
+  assert_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''create'$'\x1f''--cwd'$'\x1f''/c/Users/captain/project'$'\x1f''--label'$'\x1f''firstmate' \
+    "POSIX workspace create did not pass the cwd byte-identical"
+  pass "fm_backend_herdr_container_ensure: POSIX branch leaves workspace --cwd unchanged and never calls cygpath"
+}
+
+test_windows_create_task_converts_cwd_for_tab_create() {
+  local dir log resp fb out cyglog
+  dir="$TMP_ROOT/create-task-windows-cwd"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; cyglog="$dir/cygpath.log"; : > "$log"; : > "$cyglog"
+  printf '{"result":{"tabs":[]}}\n' > "$resp/1.out"
+  printf '{"result":{"tab":{"tab_id":"w1:t2"},"root_pane":{"pane_id":"w1:p2"}}}\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  add_cygpath_fake "$fb"
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_CYGPATH_LOG="$cyglog" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-newtask /c/Users/captain/project' "$ROOT" )
+  [ "$out" = "w1:t2 w1:p2" ] || fail "create_task should echo '<tab_id> <pane_id>', got '$out'"
+  assert_contains "$(cat "$cyglog")" $'cygpath\x1f-w\x1f/c/Users/captain/project' \
+    "Windows tab create path branch did not call cygpath -w"
+  assert_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''create'$'\x1f''--workspace'$'\x1f''w1'$'\x1f''--cwd'$'\x1f''C:\Users\captain\project'$'\x1f''--label'$'\x1f''fm-newtask' \
+    "Windows tab create did not pass a Windows-form --cwd to herdr"
+  pass "fm_backend_herdr_create_task: Windows branch converts tab --cwd with cygpath -w"
+}
+
+test_posix_create_task_leaves_tab_cwd_byte_identical() {
+  local dir log resp fb out cyglog
+  dir="$TMP_ROOT/create-task-posix-cwd"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; cyglog="$dir/cygpath.log"; : > "$log"; : > "$cyglog"
+  printf '{"result":{"tabs":[]}}\n' > "$resp/1.out"
+  printf '{"result":{"tab":{"tab_id":"w1:t2"},"root_pane":{"pane_id":"w1:p2"}}}\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  add_cygpath_fake "$fb"
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_CYGPATH_LOG="$cyglog" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-newtask /c/Users/captain/project' "$ROOT" )
+  [ "$out" = "w1:t2 w1:p2" ] || fail "create_task should echo '<tab_id> <pane_id>', got '$out'"
+  [ ! -s "$cyglog" ] || fail "POSIX tab create branch must not call cygpath; log: $(cat "$cyglog")"
+  assert_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''create'$'\x1f''--workspace'$'\x1f''w1'$'\x1f''--cwd'$'\x1f''/c/Users/captain/project'$'\x1f''--label'$'\x1f''fm-newtask' \
+    "POSIX tab create did not pass the cwd byte-identical"
+  pass "fm_backend_herdr_create_task: POSIX branch leaves tab --cwd unchanged and never calls cygpath"
+}
+
 # --- workspace_find: scoped to THIS home's own label, not just any match ----
 
 test_workspace_find_matches_only_this_homes_own_label() {
@@ -771,6 +923,33 @@ test_current_path_reads_cwd() {
   [ "$out" = "/tmp/fake-worktree" ] || fail "current_path should read foreground_cwd (the live process), not the frozen creation-time cwd, got '$out'"
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''get'$'\x1f''w1:p2' "current_path did not call pane get"
   pass "fm_backend_herdr_current_path: reads pane foreground_cwd (the live running process), not the frozen creation-time cwd"
+}
+
+test_windows_current_path_normalizes_foreground_cwd_to_posix() {
+  local dir log resp fb out cyglog
+  dir="$TMP_ROOT/cwd-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; cyglog="$dir/cygpath.log"; : > "$log"; : > "$cyglog"
+  printf '%s\n' '{"result":{"pane":{"cwd":"C:\\Users\\captain\\project","foreground_cwd":"C:\\Users\\captain\\worktree"}}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  add_cygpath_fake "$fb"
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_CYGPATH_LOG="$cyglog" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_current_path default:w1:p2' "$ROOT" )
+  [ "$out" = "/c/Users/captain/worktree" ] || fail "Windows current_path should normalize foreground_cwd to POSIX form, got '$out'"
+  assert_contains "$(cat "$cyglog")" 'cygpath'$'\x1f''-u'$'\x1f''C:\Users\captain\worktree' \
+    "Windows current_path branch did not call cygpath -u"
+  pass "fm_backend_herdr_current_path: Windows branch normalizes foreground_cwd back to POSIX form"
+}
+
+test_posix_current_path_leaves_foreground_cwd_byte_identical() {
+  local dir log resp fb out cyglog
+  dir="$TMP_ROOT/cwd-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; cyglog="$dir/cygpath.log"; : > "$log"; : > "$cyglog"
+  printf '%s\n' '{"result":{"pane":{"cwd":"C:\\Users\\captain\\project","foreground_cwd":"C:\\Users\\captain\\worktree"}}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  add_cygpath_fake "$fb"
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_CYGPATH_LOG="$cyglog" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_current_path default:w1:p2' "$ROOT" )
+  [ "$out" = 'C:\Users\captain\worktree' ] || fail "POSIX current_path should echo foreground_cwd byte-identical, got '$out'"
+  [ ! -s "$cyglog" ] || fail "POSIX current_path branch must not call cygpath; log: $(cat "$cyglog")"
+  pass "fm_backend_herdr_current_path: POSIX branch leaves foreground_cwd unchanged and never calls cygpath"
 }
 
 # --- busy_state (semantic agent state) ---------------------------------------
@@ -1290,9 +1469,13 @@ test_workspace_label_secondmate_marker_trims_whitespace
 test_workspace_label_empty_marker_falls_back_to_primary
 test_workspace_label_different_secondmates_get_different_labels
 test_cli_helper_sets_env_and_appends_trailing_session_flag
+test_windows_server_start_uses_detached_launch
+test_posix_server_start_keeps_existing_subshell_launch
 test_container_ensure_starts_server_and_workspace
 test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
+test_windows_container_ensure_converts_cwd_for_workspace_create
+test_posix_container_ensure_leaves_workspace_cwd_byte_identical
 test_container_ensure_uses_secondmate_home_label
 test_workspace_ensure_prunes_default_tab
 test_repeated_cycles_reuse_one_workspace_no_orphans
@@ -1311,6 +1494,8 @@ test_create_task_refuses_when_agent_state_ambiguous
 test_create_task_husk_replacement_creates_before_closing
 test_create_task_creates_and_parses_ids
 test_create_task_creates_with_no_focus_flag
+test_windows_create_task_converts_cwd_for_tab_create
+test_posix_create_task_leaves_tab_cwd_byte_identical
 test_workspace_find_matches_only_this_homes_own_label
 test_list_live_scoped_to_this_homes_workspace_only
 test_parse_target
@@ -1321,6 +1506,8 @@ test_capture_preserves_pane_read_failure
 test_send_key_normalizes_and_targets_pane
 test_kill_is_best_effort
 test_current_path_reads_cwd
+test_windows_current_path_normalizes_foreground_cwd_to_posix
+test_posix_current_path_leaves_foreground_cwd_byte_identical
 test_busy_state_working_maps_to_busy
 test_busy_state_done_and_blocked_map_to_idle
 test_busy_state_unknown_on_no_agent
