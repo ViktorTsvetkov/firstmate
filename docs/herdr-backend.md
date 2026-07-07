@@ -47,7 +47,7 @@ When nothing is explicitly configured, `bin/fm-backend.sh`'s `fm_backend_detect`
 See [`docs/cmux-backend.md`](cmux-backend.md#runtime-auto-detection) for cmux's primary `CMUX_WORKSPACE_ID` marker and macOS-only fallback signals.
 An auto-detected herdr spawn prints one loud stderr notice (set `config/backend` or pass `--backend tmux` to opt out).
 Auto-detecting tmux stays silent, since that reproduces today's unconfigured default byte-for-byte.
-Only when none of that resolves anything does firstmate fall back to the hard default, tmux.
+Only when none of that resolves anything does firstmate fall back to the platform default: tmux on POSIX, or herdr on Windows, since tmux is POSIX-only.
 Absent `backend=` in a task's meta always means `tmux`; a herdr task carries an explicit `backend=herdr` line, while other experimental adapters carry their own backend values.
 A herdr spawn refuses loudly if `herdr` or `jq` is missing, or if the installed herdr's protocol is older than the verified minimum (`fm_backend_herdr_version_check`).
 
