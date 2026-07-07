@@ -27,6 +27,12 @@ case "$jobs" in
   ''|*[!0-9]*|0) jobs=4 ;;
 esac
 
+set -- tests/*.test.sh
+if [ ! -e "$1" ]; then
+  echo "fm-test-runner-windows: no test scripts matched tests/*.test.sh" >&2
+  exit 1
+fi
+
 is_serial_test() {
   case "$1" in
     tests/fm-watcher-lock.test.sh|\
@@ -60,8 +66,7 @@ trap 'rm -rf "$tmp"' EXIT
 parallel_list="$tmp/parallel.txt"
 : > "$parallel_list"
 
-for test_script in tests/*.test.sh; do
-  [ -e "$test_script" ] || continue
+for test_script do
   if ! is_serial_test "$test_script"; then
     printf '%s\n' "$test_script" >> "$parallel_list"
   fi
@@ -80,8 +85,7 @@ if [ -s "$parallel_list" ]; then
 fi
 
 rc=0
-for test_script in tests/*.test.sh; do
-  [ -e "$test_script" ] || continue
+for test_script do
   echo "== $test_script =="
   key=$(test_key "$test_script")
   if is_serial_test "$test_script"; then

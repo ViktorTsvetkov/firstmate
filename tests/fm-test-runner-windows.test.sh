@@ -21,9 +21,9 @@ test_no_mistakes_posix_command_is_literal_upstream_loop() {
 
 extract_batch_command() {
   local line cmd
-  line=$(grep -F '"%NMBASH%" -lc ' "$NO_MISTAKES" || true)
-  [ -n "$line" ] || fail "native-Windows batch command is missing the Git Bash -lc call"
-  cmd=$(printf '%s\n' "$line" | sed -n 's/^[[:space:]]*"%NMBASH%" -lc "\(.*\)"$/\1/p')
+  line=$(grep -F '"%NMBASH%" -c ' "$NO_MISTAKES" || true)
+  [ -n "$line" ] || fail "native-Windows batch command is missing the Git Bash -c call"
+  cmd=$(printf '%s\n' "$line" | sed -n 's/^[[:space:]]*"%NMBASH%" -c "\(.*\)"$/\1/p')
   [ -n "$cmd" ] || fail "could not extract native-Windows batch shell command"
   cmd=${cmd//\\\"/\"}
   printf '%s\n' "$cmd"
@@ -72,6 +72,17 @@ test_runner_refuses_non_windows_platform() {
   expect_code 2 "$status" "runner should refuse non-Windows platforms"
   assert_contains "$out" "Windows only" "non-Windows refusal did not explain the guard"
   pass "fm-test-runner-windows refuses non-Windows platforms"
+}
+
+test_runner_fails_when_test_glob_is_empty() {
+  local dir out status
+  dir="$TMP_ROOT/empty-glob"
+  mkdir -p "$dir/tests"
+  out=$(cd "$dir" && FM_PLATFORM_IS_WINDOWS=yes "$RUNNER" 2>&1)
+  status=$?
+  expect_code 1 "$status" "runner should fail when tests/*.test.sh matches nothing"
+  assert_contains "$out" "no test scripts matched tests/*.test.sh" "empty-glob failure did not explain the problem"
+  pass "fm-test-runner-windows fails clearly when tests/*.test.sh is empty"
 }
 
 write_parallel_stub() {
@@ -168,4 +179,5 @@ test_runner_buffers_parallel_output_replays_in_order_and_preserves_rc() {
 test_no_mistakes_posix_command_is_literal_upstream_loop
 test_no_mistakes_batch_command_selects_windows_or_posix_branch
 test_runner_refuses_non_windows_platform
+test_runner_fails_when_test_glob_is_empty
 test_runner_buffers_parallel_output_replays_in_order_and_preserves_rc
