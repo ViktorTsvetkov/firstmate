@@ -569,10 +569,19 @@ fm_backend_cmux_composer_state() {  # <target> [expected-label] -> empty|pending
   case "$stripped" in
     '❯'|'>'|'$'|'%'|'#') printf 'empty'; return 0 ;;
   esac
+  if fm_platform_is_windows; then
+    # msys2 bash ${x#??} is byte-oriented and mangles the multibyte prompt glyph;
+    # strip the exact literal prompt prefix instead.
+    case "$stripped" in
+      '❯ '*) stripped=${stripped#'❯ '} ;; '> '*) stripped=${stripped#'> '} ;; '$ '*) stripped=${stripped#'$ '} ;; '% '*) stripped=${stripped#'% '} ;; '# '*) stripped=${stripped#'# '} ;;
+      '❯'*) stripped=${stripped#'❯'} ;; '>'*) stripped=${stripped#'>'} ;; '$'*) stripped=${stripped#'$'} ;; '%'*) stripped=${stripped#'%'} ;; '#'*) stripped=${stripped#'#'} ;;
+    esac
+  else
   case "$stripped" in
     '❯ '*|'> '*|'$ '*|'% '*|'# '*) stripped=${stripped#??} ;;
     '❯'*|'>'*|'$'*|'%'*|'#'*) stripped=${stripped#?} ;;
   esac
+  fi
   stripped="${stripped#"${stripped%%[![:space:]]*}"}"
   stripped="${stripped%"${stripped##*[![:space:]]}"}"
   [ -n "$stripped" ] || { printf 'empty'; return 0; }

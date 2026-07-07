@@ -741,6 +741,43 @@ test_composer_state_ghost_placeholder_is_empty() {
   pass "fm_backend_cmux_composer_state: the ghost placeholder text reads empty, not pending"
 }
 
+test_composer_state_forced_windows_literal_prompt_glyph_strip() {
+  local dir fb out
+  dir="$TMP_ROOT/composer-windows-glyph-ghost"; mkdir -p "$dir/responses"
+  cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 2 $'  ╭────────────────────────╮\n  │ ❯ Type a message...    │\n  ╰──────── Composer ─────╯'
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_composer_state "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT" )
+  [ "$out" = empty ] || fail "forced-Windows should strip the literal prompt glyph and classify ghost placeholder as empty, got '$out'"
+
+  dir="$TMP_ROOT/composer-windows-glyph-pending"; mkdir -p "$dir/responses"
+  cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 2 $'  ╭────────────────────────╮\n  │ ❯ real text here       │\n  ╰──────── Composer ─────╯'
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_composer_state "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT" )
+  [ "$out" = pending ] || fail "forced-Windows should preserve real composer text as pending after prompt-glyph strip, got '$out'"
+  pass "fm_backend_cmux_composer_state: forced-Windows strips the literal prompt glyph without losing real text"
+}
+
+test_composer_state_forced_posix_keeps_parameter_prompt_glyph_strip() {
+  local dir fb out
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      echo "skip: WINDOWS-DEFER fm_backend_cmux_composer_state forced-POSIX prompt-glyph strip - native Windows bash cannot emulate POSIX multibyte parameter expansion; POSIX branch stays enforced on ubuntu+WSL"
+      return 0 ;;
+  esac
+  dir="$TMP_ROOT/composer-posix-glyph-ghost"; mkdir -p "$dir/responses"
+  cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 2 $'  ╭────────────────────────╮\n  │ ❯ Type a message...    │\n  ╰──────── Composer ─────╯'
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_composer_state "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT" )
+  [ "$out" = empty ] || fail "forced-POSIX should keep the parameter-expansion prompt-glyph strip and classify ghost placeholder as empty, got '$out'"
+  pass "fm_backend_cmux_composer_state: forced-POSIX keeps the parameter-expansion prompt-glyph strip"
+}
+
 test_composer_state_real_text_is_pending() {
   local dir fb out
   dir="$TMP_ROOT/composer-pending"; mkdir -p "$dir/responses"
@@ -1031,6 +1068,8 @@ test_send_literal_uses_separator_for_option_shaped_text
 test_current_path_probes_with_marker
 test_composer_state_bare_prompt_is_empty
 test_composer_state_ghost_placeholder_is_empty
+test_composer_state_forced_windows_literal_prompt_glyph_strip
+test_composer_state_forced_posix_keeps_parameter_prompt_glyph_strip
 test_composer_state_real_text_is_pending
 test_composer_state_strips_windows_jq_crlf_before_box_scan
 test_composer_state_popup_placeholder_fill_is_pending
