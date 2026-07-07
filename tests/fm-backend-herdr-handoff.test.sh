@@ -141,7 +141,9 @@ test_windows_handoff_completes_with_space_safe_native_shell() {
   read -r tab pane <<EOF
 $ids
 EOF
-  [ "$tab" = "w1:t2" ] && [ "$pane" = "w1:p2" ] || fail "create_task returned unexpected ids: $ids"
+  if [ "$tab" != "w1:t2" ] || [ "$pane" != "w1:p2" ]; then
+    fail "create_task returned unexpected ids: $ids"
+  fi
   target="fmtest:$pane"
 
   PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" \
