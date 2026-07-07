@@ -33,7 +33,9 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 ## Repo conventions
 
 - This repo is a template for running a firstmate orchestrator agent.
-  `AGENTS.md` is the agent's main job description and names when to load bundled firstmate skills; `CLAUDE.md` is a symlink to it, and `.claude/skills` is a symlink to `.agents/skills`.
+  `AGENTS.md` is the agent's main job description and names when to load bundled firstmate skills.
+  `CLAUDE.md` is a symlink to it on POSIX; native-Windows bootstrap may materialize `CLAUDE.md` as a regular mirror because Git checks out symlink blobs as placeholder text there.
+  `.claude/skills` is a symlink to `.agents/skills`.
 - Only shared material is tracked: `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and `skills/`.
   `.agents/skills/` holds agent-loaded skills that assume a live firstmate home and carry `metadata.internal: true` so installers such as [skills.sh](https://skills.sh) hide them from discovery; `skills/` holds standalone, installer-facing public skills with no firstmate dependency (see the README's "Two-tier skill layout").
   Everything personal to one captain's fleet (`.env`, `data/`, `state/`, `config/`, `projects/`, `.no-mistakes/`) is gitignored; never commit it.
@@ -119,7 +121,7 @@ tests/cmux-test-safety.sh                 # guarded cleanup helper for real-cmux
 tests/fm-backend-cmux.test.sh             # fake cmux CLI unit tests for the experimental cmux adapter, including socket auth, title scoping, target recovery, fresh-surface liveness, current-path probing, structural composer verification, and secondmate refusal
 tests/fm-backend-cmux-smoke.test.sh       # real cmux adapter smoke test, skipped when cmux or jq is unavailable or the socket is not password-mode authenticated, using fm-test- workspaces and guarded cleanup
 tests/fm-test-runner-windows.test.sh      # native-Windows parallel/serial test runner: no-mistakes batch-leg platform seam, non-Windows refusal, empty-glob failure, buffered in-order output replay, serial bucketing, and preserved failure rc
-[ "$(readlink CLAUDE.md)" = "AGENTS.md" ]
+if [ -L CLAUDE.md ]; then [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]; else cmp -s AGENTS.md CLAUDE.md; fi
 [ "$(readlink .claude/skills)" = "../.agents/skills" ]
 tmp=$(mktemp -d) && printf 'done: smoke\n' > "$tmp/smoke.status" && FM_STATE_OVERRIDE="$tmp" FM_SIGNAL_GRACE=1 FM_POLL=1 FM_HEARTBEAT=999999 bin/fm-watch-arm.sh  # watcher re-arm smoke test (prints arm status, then an actionable signal)
 ```
