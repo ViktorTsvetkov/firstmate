@@ -350,6 +350,99 @@ test_orca_backend_gates_orca_tool_only_when_selected() {
   pass "bootstrap: backend=orca gates the Orca CLI without requiring it on the default backend"
 }
 
+make_git_symlink_placeholder_repo() {
+  local root=$1 blob
+  git init -q -b main "$root"
+  git -C "$root" config core.symlinks false
+  git -C "$root" config core.autocrlf false
+  git -C "$root" config user.name "Firstmate Tests"
+  git -C "$root" config user.email "tests@example.invalid"
+  mkdir -p "$root/config"
+  printf '%s\n' manual > "$root/config/backlog-backend"
+  printf '%s\n' 'full firstmate instructions' 'line two' > "$root/AGENTS.md"
+  git -C "$root" add AGENTS.md config/backlog-backend
+  blob=$(printf '%s' AGENTS.md | git -C "$root" hash-object -w --stdin)
+  git -C "$root" update-index --add --cacheinfo "120000,$blob,CLAUDE.md"
+  printf '%s' AGENTS.md > "$root/CLAUDE.md"
+  git -C "$root" commit -qm initial
+}
+
+test_windows_materialized_tracked_symlink_stays_porcelain_clean() {
+  local case_dir root fakebin git_bin out status
+  case_dir="$TMP_ROOT/claude-md-git-clean"
+  root="$case_dir/root"
+  mkdir -p "$root"
+  make_git_symlink_placeholder_repo "$root"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  git_bin=$(dirname "$(command -v git)")
+
+  status=$(git -C "$root" status --porcelain)
+  [ -z "$status" ] || fail "symlink-placeholder fixture should start clean, got: $status"
+
+  out=$(PATH="$fakebin:$BASE_PATH:$git_bin" FM_HOME="$root" FM_ROOT_OVERRIDE="$root" FM_PLATFORM_IS_WINDOWS=yes \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  status=$(git -C "$root" status --porcelain)
+
+  [ -z "$out" ] || fail "Windows tracked-symlink materialization should stay silent on success, got: $out"
+  cmp -s "$root/AGENTS.md" "$root/CLAUDE.md" || fail "tracked CLAUDE.md was not materialized as an AGENTS.md mirror"
+  printf '%s\n' "$status" | grep -F CLAUDE.md >/dev/null && fail "CLAUDE.md stayed dirty after materialization: $status"
+  case "$(git -C "$root" ls-files -v CLAUDE.md)" in
+    S*) : ;;
+    *) fail "CLAUDE.md was not marked skip-worktree after materialization" ;;
+  esac
+
+  pass "bootstrap materializes tracked Windows CLAUDE.md and keeps porcelain clean via skip-worktree"
+}
+
+test_detect_only_does_not_materialize_windows_claude_md() {
+  local case_dir root fakebin out before after
+  case_dir="$TMP_ROOT/claude-md-detect-only"
+  root="$case_dir/root"
+  mkdir -p "$root/config"
+  printf '%s\n' manual > "$root/config/backlog-backend"
+  printf '%s\n' 'full firstmate instructions' 'line two' > "$root/AGENTS.md"
+  printf '%s' AGENTS.md > "$root/CLAUDE.md"
+  before=$(cat "$root/CLAUDE.md")
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$root" FM_ROOT_OVERRIDE="$root" FM_PLATFORM_IS_WINDOWS=yes \
+    FM_BOOTSTRAP_DETECT_ONLY=1 FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  after=$(cat "$root/CLAUDE.md")
+
+  [ -z "$out" ] || fail "detect-only Windows CLAUDE.md path should stay silent, got: $out"
+  [ "$before" = "$after" ] || fail "detect-only mutated CLAUDE.md from '$before' to '$after'"
+  [ "$after" = AGENTS.md ] || fail "detect-only CLAUDE.md placeholder changed unexpectedly: $after"
+
+  pass "bootstrap detect-only mode leaves a Windows CLAUDE.md placeholder unchanged"
+}
+
+test_posix_leaves_valid_claude_md_symlink_untouched() {
+  local case_dir root fakebin out before after
+  case_dir="$TMP_ROOT/claude-md-posix"
+  root="$case_dir/root"
+  mkdir -p "$root/config"
+  printf '%s\n' manual > "$root/config/backlog-backend"
+  printf '%s\n' 'full firstmate instructions' > "$root/AGENTS.md"
+  ln -s AGENTS.md "$root/CLAUDE.md"
+  if [ ! -L "$root/CLAUDE.md" ]; then
+    pass "bootstrap forced-POSIX symlink test skipped because this host cannot create file symlinks"
+    return 0
+  fi
+  before=$(ls -l "$root/CLAUDE.md")
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$root" FM_ROOT_OVERRIDE="$root" FM_PLATFORM_IS_WINDOWS=no \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  after=$(ls -l "$root/CLAUDE.md")
+
+  [ -z "$out" ] || fail "forced-POSIX CLAUDE.md path should stay silent, got: $out"
+  [ -L "$root/CLAUDE.md" ] || fail "forced-POSIX bootstrap replaced a valid CLAUDE.md symlink"
+  [ "$(readlink "$root/CLAUDE.md")" = AGENTS.md ] || fail "forced-POSIX bootstrap changed the CLAUDE.md symlink target"
+  [ "$before" = "$after" ] || fail "forced-POSIX bootstrap changed the CLAUDE.md symlink bytes or metadata"
+
+  pass "bootstrap leaves a valid POSIX CLAUDE.md symlink untouched on the forced-POSIX path"
+}
+
 test_fleet_sync_timeout_scales_with_origin_backed_project_count() {
   local case_dir home fakebin fake_root out expected
   case_dir="$TMP_ROOT/fleet-timeout-scaled"
@@ -503,6 +596,9 @@ test_bootstrap_reporting
 test_no_mistakes_min_version
 test_git_is_required_with_supported_install_instruction
 test_orca_backend_gates_orca_tool_only_when_selected
+test_windows_materialized_tracked_symlink_stays_porcelain_clean
+test_detect_only_does_not_materialize_windows_claude_md
+test_posix_leaves_valid_claude_md_symlink_untouched
 test_fleet_sync_timeout_scales_with_origin_backed_project_count
 test_fleet_sync_timeout_floor_preserves_small_fleets
 test_fleet_sync_timeout_explicit_override_wins

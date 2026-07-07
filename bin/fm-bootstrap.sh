@@ -7,6 +7,7 @@
 #                 "CREW_HARNESS_OVERRIDE: <name>",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
 #                 "CREW_DISPATCH: active config/crew-dispatch.json" plus indented rules,
+#                 "CLAUDE_MD: skipped|failed: <reason>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "TASKS_AXI: available", "TANGLE: <remediation>",
 #                 "SECONDMATE_SYNC: secondmate <id>: skipped: <reason>",
@@ -51,6 +52,9 @@
 #          bootstrap prints TASKS_AXI: available. quota-axi is required because
 #          crew-dispatch quota-balanced may call it; fm-dispatch-select.sh still
 #          degrades at runtime when quota data is unavailable.
+#          On native Windows, bootstrap replaces Git's checked-out CLAUDE.md
+#          symlink-placeholder text file with a real AGENTS.md mirror and marks
+#          it skip-worktree so the intentional divergence stays porcelain-clean.
 #          X mode is OPTIONAL and inert unless FM_HOME/.env has a non-empty
 #          FMX_PAIRING_TOKEN. When opted in, bootstrap requires curl+jq, writes
 #          the relay poll shim and 30s cadence config, and prints an FMX line.
@@ -63,16 +67,16 @@
 #          refresh relays any completed fm-fleet-sync.sh output before the
 #          aggregate timeout skip line with timeout and elapsed seconds.
 #          Set FM_FLEET_PRUNE=0 to skip branch pruning during that refresh.
-#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the four MUTATING sweeps
-#          (secondmate_sync, secondmate_liveness_sweep, x_mode_setup,
-#          fleet_sync) while still printing every read-only detect line
-#          above; the TANGLE line switches to advisory-only wording with no
-#          checkout command. Used by
+#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip native-Windows CLAUDE.md
+#          materialization and the four MUTATING sweeps (secondmate_sync,
+#          secondmate_liveness_sweep, x_mode_setup, fleet_sync) while still
+#          printing every read-only detect line above; the TANGLE line switches
+#          to advisory-only wording with no checkout command. Used by
 #          fm-session-start.sh's read-only path when another live session holds
 #          the fleet lock, so a second concurrent session never race-mutates
-#          secondmate homes, X-mode artifacts, project clones, or repair
-#          instructions. Unset/0 (the default) runs every sweep exactly as
-#          before - this flag is purely additive.
+#          CLAUDE.md, secondmate homes, X-mode artifacts, project clones, or
+#          repair instructions. Unset/0 (the default) runs every mutation
+#          exactly as before - this flag is purely additive.
 #        fm-bootstrap.sh install <tool>...
 #          Install the named tools (only ones the captain approved).
 set -u
@@ -95,6 +99,89 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+
+windows_claude_is_tracked_symlink_placeholder() {
+  local index_line mode
+  git -C "$FM_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  index_line=$(git -C "$FM_ROOT" ls-files -s -- CLAUDE.md 2>/dev/null) || return 1
+  [ -n "$index_line" ] || return 1
+  mode=${index_line%% *}
+  [ "$mode" = 120000 ]
+}
+
+windows_claude_matches_tracked_symlink_target() {
+  local claude tmp matched
+  claude="$FM_ROOT/CLAUDE.md"
+  git -C "$FM_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  windows_claude_is_tracked_symlink_placeholder || return 1
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fm-claude-target.XXXXXX" 2>/dev/null) || return 1
+  git -C "$FM_ROOT" cat-file blob :CLAUDE.md >"$tmp" 2>/dev/null || {
+    rm -f "$tmp"
+    return 1
+  }
+  cmp -s "$claude" "$tmp"
+  matched=$?
+  rm -f "$tmp"
+  return "$matched"
+}
+
+mark_windows_claude_skip_worktree() {
+  git -C "$FM_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  git -C "$FM_ROOT" ls-files --error-unmatch -- CLAUDE.md >/dev/null 2>&1 || return 1
+  git -C "$FM_ROOT" update-index --skip-worktree CLAUDE.md >/dev/null 2>&1
+}
+
+materialize_windows_claude_md() {
+  fm_platform_is_windows || return 0
+
+  local agents claude tmp
+  agents="$FM_ROOT/AGENTS.md"
+  claude="$FM_ROOT/CLAUDE.md"
+  [ -f "$agents" ] || return 0
+
+  if [ -L "$claude" ]; then
+    return 0
+  fi
+  if [ -f "$claude" ] && cmp -s "$agents" "$claude"; then
+    if windows_claude_is_tracked_symlink_placeholder && ! mark_windows_claude_skip_worktree; then
+      echo "CLAUDE_MD: failed: materialized CLAUDE.md but could not mark it skip-worktree (worktree left dirty)"
+    fi
+    return 0
+  fi
+  if [ -e "$claude" ] && [ ! -f "$claude" ]; then
+    echo "CLAUDE_MD: skipped: CLAUDE.md exists but is not a regular file or symlink"
+    return 0
+  fi
+  if ! [ -f "$claude" ]; then
+    return 0
+  fi
+  if ! windows_claude_is_tracked_symlink_placeholder; then
+    echo "CLAUDE_MD: skipped: CLAUDE.md diverges from AGENTS.md but is not the tracked symlink placeholder"
+    return 0
+  fi
+  if ! windows_claude_matches_tracked_symlink_target; then
+    echo "CLAUDE_MD: skipped: CLAUDE.md diverges from AGENTS.md but is not the tracked symlink placeholder"
+    return 0
+  fi
+
+  tmp="$FM_ROOT/.CLAUDE.md.materialize.$$"
+  rm -f "$tmp" 2>/dev/null || true
+  if ! ln "$agents" "$tmp" 2>/dev/null; then
+    cp "$agents" "$tmp" 2>/dev/null || {
+      rm -f "$tmp" 2>/dev/null || true
+      echo "CLAUDE_MD: failed: could not materialize CLAUDE.md from AGENTS.md"
+      return 0
+    }
+  fi
+  mv -f "$tmp" "$claude" 2>/dev/null || {
+    rm -f "$tmp" 2>/dev/null || true
+    echo "CLAUDE_MD: failed: could not replace broken CLAUDE.md"
+    return 0
+  }
+  if ! mark_windows_claude_skip_worktree; then
+    echo "CLAUDE_MD: failed: materialized CLAUDE.md but could not mark it skip-worktree (worktree left dirty)"
+  fi
+}
 
 fleet_sync_origin_backed_project_count() {
   local count proj
@@ -617,6 +704,7 @@ if ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
   echo "TASKS_AXI: available"
 fi
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
+  materialize_windows_claude_md
   secondmate_sync
   secondmate_liveness_sweep
   x_mode_setup
