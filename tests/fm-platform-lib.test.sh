@@ -28,13 +28,16 @@ SH
   out=$(PATH="$fakebin:$PATH" bash -c '. "$1"; fm_platform_ps_field 4321 ppid' _ "$LIB")
   [ "$out" = 1234 ] || fail "fixed-column ps ppid parse returned '$out'"
 
+  out=$(PATH="$fakebin:$PATH" bash -c '. "$1"; fm_platform_ps_fixed_field 4321 pgid' _ "$LIB")
+  [ "$out" = 4321 ] || fail "fixed-column ps pgid parse returned '$out'"
+
   out=$(PATH="$fakebin:$PATH" bash -c '. "$1"; fm_platform_ps_field 4321 comm' _ "$LIB")
   [ "$out" = /usr/bin/bash ] || fail "fixed-column ps command parse returned '$out'"
 
   out=$(PATH="$fakebin:$PATH" bash -c '. "$1"; fm_platform_pid_identity 4321' _ "$LIB")
   [ "$out" = "12:34:56 /usr/bin/bash" ] || fail "fixed-column ps identity returned '$out'"
 
-  pass "fm-platform-lib parses MSYS fixed-column ps output for ppid, command, and identity"
+  pass "fm-platform-lib parses MSYS fixed-column ps output for ppid, pgid, command, and identity"
 }
 
 test_windows_userprofile_home_fallback() {
