@@ -261,7 +261,8 @@ fm_backend_detect_cmux_app_is_ancestor() {
 # fm_backend_name: resolve the ACTIVE backend for a NEW spawn, absent an
 # explicit per-task override. Precedence: FM_BACKEND env, then config/backend
 # (a single word on its first non-empty line, mirroring config/crew-harness),
-# then runtime auto-detection (fm_backend_detect), then default tmux. A
+# then runtime auto-detection (fm_backend_detect), then default tmux on POSIX or
+# herdr on Windows. A
 # per-task `--backend` flag is parsed by the caller (fm-spawn.sh) and takes
 # precedence over this resolution entirely; it is not read here. Auto-detect
 # fires only when nothing was explicitly configured, so an explicit setting
@@ -304,7 +305,11 @@ fm_backend_name() {
     printf '%s' "$detected"
     return 0
   fi
-  printf 'tmux'
+  if fm_platform_is_windows; then
+    printf 'herdr'
+  else
+    printf 'tmux'
+  fi
 }
 
 # fm_backend_validate: refuse an unknown backend LOUDLY. Silent on success.
