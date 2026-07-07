@@ -80,10 +80,19 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
 
+windows_claude_is_tracked_symlink_placeholder() {
+  local index_line mode
+  git -C "$FM_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  index_line=$(git -C "$FM_ROOT" ls-files -s -- CLAUDE.md 2>/dev/null) || return 1
+  [ -n "$index_line" ] || return 1
+  mode=${index_line%% *}
+  [ "$mode" = 120000 ]
+}
+
 mark_windows_claude_skip_worktree() {
-  git -C "$FM_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
-  git -C "$FM_ROOT" ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1 || return 0
-  git -C "$FM_ROOT" update-index --skip-worktree CLAUDE.md >/dev/null 2>&1 || true
+  git -C "$FM_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  git -C "$FM_ROOT" ls-files --error-unmatch -- CLAUDE.md >/dev/null 2>&1 || return 1
+  git -C "$FM_ROOT" update-index --skip-worktree CLAUDE.md >/dev/null 2>&1
 }
 
 materialize_windows_claude_md() {
@@ -98,11 +107,20 @@ materialize_windows_claude_md() {
     return 0
   fi
   if [ -f "$claude" ] && cmp -s "$agents" "$claude"; then
-    mark_windows_claude_skip_worktree
+    if windows_claude_is_tracked_symlink_placeholder && ! mark_windows_claude_skip_worktree; then
+      echo "CLAUDE_MD: failed: materialized CLAUDE.md but could not mark it skip-worktree (worktree left dirty)"
+    fi
     return 0
   fi
   if [ -e "$claude" ] && [ ! -f "$claude" ]; then
     echo "CLAUDE_MD: skipped: CLAUDE.md exists but is not a regular file or symlink"
+    return 0
+  fi
+  if ! [ -f "$claude" ]; then
+    return 0
+  fi
+  if ! windows_claude_is_tracked_symlink_placeholder; then
+    echo "CLAUDE_MD: skipped: CLAUDE.md diverges from AGENTS.md but is not the tracked symlink placeholder"
     return 0
   fi
 
@@ -120,7 +138,9 @@ materialize_windows_claude_md() {
     echo "CLAUDE_MD: failed: could not replace broken CLAUDE.md"
     return 0
   }
-  mark_windows_claude_skip_worktree
+  if ! mark_windows_claude_skip_worktree; then
+    echo "CLAUDE_MD: failed: materialized CLAUDE.md but could not mark it skip-worktree (worktree left dirty)"
+  fi
 }
 
 fleet_sync() {

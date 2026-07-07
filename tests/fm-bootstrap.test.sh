@@ -179,9 +179,9 @@ test_orca_backend_gates_orca_tool_only_when_selected() {
   pass "bootstrap: backend=orca gates the Orca CLI without requiring it on the default backend"
 }
 
-test_windows_materializes_placeholder_claude_md() {
+test_windows_skips_untracked_divergent_claude_md() {
   local case_dir root fakebin out
-  case_dir="$TMP_ROOT/claude-md-placeholder"
+  case_dir="$TMP_ROOT/claude-md-untracked-divergent"
   root="$case_dir/root"
   mkdir -p "$root/config"
   printf '%s\n' manual > "$root/config/backlog-backend"
@@ -192,15 +192,11 @@ test_windows_materializes_placeholder_claude_md() {
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$root" FM_ROOT_OVERRIDE="$root" FM_PLATFORM_IS_WINDOWS=yes \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
 
-  [ -z "$out" ] || fail "Windows CLAUDE.md materialization should stay silent on success, got: $out"
-  cmp -s "$root/AGENTS.md" "$root/CLAUDE.md" || fail "CLAUDE.md was not materialized as an AGENTS.md mirror"
+  [ "$out" = "CLAUDE_MD: skipped: CLAUDE.md diverges from AGENTS.md but is not the tracked symlink placeholder" ] \
+    || fail "Windows untracked divergent CLAUDE.md should be skipped, got: $out"
+  [ "$(cat "$root/CLAUDE.md")" = AGENTS.md ] || fail "untracked divergent CLAUDE.md was overwritten"
 
-  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$root" FM_ROOT_OVERRIDE="$root" FM_PLATFORM_IS_WINDOWS=yes \
-    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  [ -z "$out" ] || fail "Windows CLAUDE.md materialization should be idempotent, got: $out"
-  cmp -s "$root/AGENTS.md" "$root/CLAUDE.md" || fail "CLAUDE.md mirror changed after idempotent rerun"
-
-  pass "bootstrap materializes a native-Windows CLAUDE.md placeholder into an AGENTS.md mirror"
+  pass "bootstrap skips an untracked divergent Windows CLAUDE.md"
 }
 
 make_git_symlink_placeholder_repo() {
@@ -217,6 +213,20 @@ make_git_symlink_placeholder_repo() {
   blob=$(printf '%s' AGENTS.md | git -C "$root" hash-object -w --stdin)
   git -C "$root" update-index --add --cacheinfo "120000,$blob,CLAUDE.md"
   printf '%s' AGENTS.md > "$root/CLAUDE.md"
+  git -C "$root" commit -qm initial
+}
+
+make_git_regular_claude_repo() {
+  local root=$1
+  git init -q -b main "$root"
+  git -C "$root" config core.autocrlf false
+  git -C "$root" config user.name "Firstmate Tests"
+  git -C "$root" config user.email "tests@example.invalid"
+  mkdir -p "$root/config"
+  printf '%s\n' manual > "$root/config/backlog-backend"
+  printf '%s\n' 'full firstmate instructions' 'line two' > "$root/AGENTS.md"
+  printf '%s\n' 'custom claude instructions' > "$root/CLAUDE.md"
+  git -C "$root" add AGENTS.md CLAUDE.md config/backlog-backend
   git -C "$root" commit -qm initial
 }
 
@@ -245,6 +255,66 @@ test_windows_materialized_tracked_symlink_stays_porcelain_clean() {
   esac
 
   pass "bootstrap materializes tracked Windows CLAUDE.md and keeps porcelain clean via skip-worktree"
+}
+
+test_windows_regular_tracked_claude_md_is_not_overwritten() {
+  local case_dir root fakebin out before after status
+  case_dir="$TMP_ROOT/claude-md-regular-tracked"
+  root="$case_dir/root"
+  mkdir -p "$root"
+  make_git_regular_claude_repo "$root"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  before=$(cat "$root/CLAUDE.md")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$root" FM_ROOT_OVERRIDE="$root" FM_PLATFORM_IS_WINDOWS=yes \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  after=$(cat "$root/CLAUDE.md")
+  status=$(git -C "$root" status --porcelain)
+
+  [ "$out" = "CLAUDE_MD: skipped: CLAUDE.md diverges from AGENTS.md but is not the tracked symlink placeholder" ] \
+    || fail "Windows regular tracked CLAUDE.md should be skipped, got: $out"
+  [ "$before" = "$after" ] || fail "regular tracked CLAUDE.md was overwritten"
+  [ -z "$status" ] || fail "regular tracked CLAUDE.md skip should leave porcelain clean, got: $status"
+  case "$(git -C "$root" ls-files -s -- CLAUDE.md)" in
+    100644*) : ;;
+    *) fail "regular CLAUDE.md fixture was not tracked as mode 100644" ;;
+  esac
+
+  pass "bootstrap does not overwrite a regular tracked Windows CLAUDE.md"
+}
+
+test_windows_skip_worktree_failure_is_reported() {
+  local case_dir root fakebin real_git out status
+  case_dir="$TMP_ROOT/claude-md-skip-worktree-fails"
+  root="$case_dir/root"
+  mkdir -p "$root"
+  make_git_symlink_placeholder_repo "$root"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  real_git=$(command -v git)
+  cat > "$fakebin/git" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ]; then
+  git_root=\$2
+  shift 2
+  if [ "\${1:-}" = update-index ] && [ "\${2:-}" = --skip-worktree ] && [ "\${3:-}" = CLAUDE.md ]; then
+    exit 1
+  fi
+  exec "$real_git" -C "\$git_root" "\$@"
+fi
+exec "$real_git" "\$@"
+SH
+  chmod +x "$fakebin/git"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$root" FM_ROOT_OVERRIDE="$root" FM_PLATFORM_IS_WINDOWS=yes \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  status=$(git -C "$root" status --porcelain)
+
+  [ "$out" = "CLAUDE_MD: failed: materialized CLAUDE.md but could not mark it skip-worktree (worktree left dirty)" ] \
+    || fail "skip-worktree failure should be reported, got: $out"
+  cmp -s "$root/AGENTS.md" "$root/CLAUDE.md" || fail "CLAUDE.md was not materialized before skip-worktree failure"
+  printf '%s\n' "$status" | grep -F CLAUDE.md >/dev/null || fail "CLAUDE.md should be dirty when skip-worktree fails"
+
+  pass "bootstrap reports Windows CLAUDE.md skip-worktree failures"
 }
 
 test_detect_only_does_not_materialize_windows_claude_md() {
@@ -368,8 +438,10 @@ ROWS
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_orca_backend_gates_orca_tool_only_when_selected
-test_windows_materializes_placeholder_claude_md
+test_windows_skips_untracked_divergent_claude_md
 test_windows_materialized_tracked_symlink_stays_porcelain_clean
+test_windows_regular_tracked_claude_md_is_not_overwritten
+test_windows_skip_worktree_failure_is_reported
 test_detect_only_does_not_materialize_windows_claude_md
 test_posix_leaves_valid_claude_md_symlink_untouched
 test_crew_dispatch_active_rules_are_surfaced
