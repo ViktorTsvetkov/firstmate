@@ -10,18 +10,6 @@
 # being installed and reachable.
 set -u
 
-# WINDOWS-DEFER: cmux capture comparison sees a stray CR because jq's Windows
-# build emits CRLF (`jq -r '"a\nb"'` -> "a\r\nb\r\n"), so the locally-trimmed
-# screen text carries \r. This is a jq/tool-output issue, NOT the script line
-# endings the repo .gitattributes pins to LF - re-tested on LF and it still
-# fails - so it stays deferred to winport Phase 0 (jq/tool-output CRLF, e.g. strip
-# \r after jq in bin/backends/cmux.sh). STRICT ADDITIVE - Linux/macOS still run
-# this test in full (ubuntu CI is the authoritative gate); it self-skips only on
-# native Windows, where this pre-existing substrate failure is not this PR's job.
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) echo "skip: WINDOWS-DEFER fm-backend-cmux - jq Windows build emits CRLF in capture (winport Phase 0, jq/tool-output CRLF)"; exit 0 ;;
-esac
-
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -539,6 +527,34 @@ test_target_ready_rejects_label_mismatch() {
   pass "fm_backend_cmux_target_ready: rejects a workspace id reused under a different title"
 }
 
+test_target_ready_strips_windows_jq_cr_on_exact_title_compare() {
+  local dir fb title
+  dir="$TMP_ROOT/ready-label-windows-cr"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-label)
+  printf '{"workspaces":[{"id":"aaaaaaaa-0000-0000-0000-000000000000","title":"%s\\r"}]}' "$title" > "$dir/responses/1.out"
+  cmux_panes_response "$dir" 2 "bbbbbbbb-1111-1111-1111-111111111111"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_target_ready "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" fm-label' "$ROOT"
+  expect_code 0 $? "target_ready should strip jq's Windows CR before comparing the workspace title"
+  pass "fm_backend_cmux_target_ready: strips Windows jq CR before exact workspace-title compares"
+}
+
+test_target_ready_forced_posix_preserves_jq_cr_on_exact_title_compare() {
+  local dir fb status title
+  dir="$TMP_ROOT/ready-label-posix-cr"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-label)
+  printf '{"workspaces":[{"id":"aaaaaaaa-0000-0000-0000-000000000000","title":"%s\\r"}]}' "$title" > "$dir/responses/1.out"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_target_ready "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" fm-label' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "forced-POSIX should preserve a jq-emitted CR, matching the upstream POSIX path"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''list-panes' \
+    "forced-POSIX should preserve the CR and fail the exact title compare before list-panes"
+  pass "fm_backend_cmux_target_ready: forced-POSIX preserves jq CR, proving the POSIX path is unchanged"
+}
+
 test_capture_trims_locally() {
   local dir fb out
   dir="$TMP_ROOT/capture"; mkdir -p "$dir/responses"
@@ -553,6 +569,36 @@ test_capture_trims_locally() {
   cmux_assert_call_order "$dir/log" $'\x1f''list-panes'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000' \
     $'\x1f''--scrollback' "capture did not verify readiness before the actual read"
   pass "fm_backend_cmux_capture: fetches generously and trims to N lines locally"
+}
+
+test_capture_strips_windows_jq_crlf() {
+  local dir fb out
+  dir="$TMP_ROOT/capture-windows-crlf"; mkdir -p "$dir/responses"
+  cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  printf '{"text":"line one\\r\\nline two\\r\\nline three\\r\\nline four\\r"}' > "$dir/responses/2.out"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_capture "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" 2' "$ROOT" )
+  [ "$out" = $'line three\nline four' ] || fail "forced-Windows capture should strip jq CRLF, got '$out'"
+  pass "fm_backend_cmux_capture: forced-Windows strips jq CRLF from captured text"
+}
+
+test_capture_forced_posix_preserves_jq_crlf() {
+  # WINDOWS-DEFER: native Windows jq does text-mode CRLF translation on stdout; STRICT ADDITIVE - Linux/macOS/WSL still run this assertion in full, with ubuntu CI as the authoritative POSIX gate.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      echo "skip: WINDOWS-DEFER fm_backend_cmux_capture forced-POSIX exact-jq-CRLF - asserts POSIX-jq byte output, but native Windows jq does text-mode CRLF translation; POSIX byte-preservation stays enforced on ubuntu+WSL"
+      return 0 ;;
+  esac
+  local dir fb out
+  dir="$TMP_ROOT/capture-posix-crlf"; mkdir -p "$dir/responses"
+  cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  printf '{"text":"line one\\r\\nline two\\r\\nline three\\r\\nline four\\r"}' > "$dir/responses/2.out"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_capture "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" 2' "$ROOT" )
+  [ "$out" = $'line three\r\nline four\r' ] || fail "forced-POSIX should preserve jq CRLF exactly, got '$out'"
+  pass "fm_backend_cmux_capture: forced-POSIX preserves jq CRLF, proving the POSIX capture path is unchanged"
 }
 
 test_capture_fails_when_read_screen_fails_empty() {
@@ -695,6 +741,43 @@ test_composer_state_ghost_placeholder_is_empty() {
   pass "fm_backend_cmux_composer_state: the ghost placeholder text reads empty, not pending"
 }
 
+test_composer_state_forced_windows_literal_prompt_glyph_strip() {
+  local dir fb out
+  dir="$TMP_ROOT/composer-windows-glyph-ghost"; mkdir -p "$dir/responses"
+  cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 2 $'  ╭────────────────────────╮\n  │ ❯ Type a message...    │\n  ╰──────── Composer ─────╯'
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_composer_state "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT" )
+  [ "$out" = empty ] || fail "forced-Windows should strip the literal prompt glyph and classify ghost placeholder as empty, got '$out'"
+
+  dir="$TMP_ROOT/composer-windows-glyph-pending"; mkdir -p "$dir/responses"
+  cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 2 $'  ╭────────────────────────╮\n  │ ❯ real text here       │\n  ╰──────── Composer ─────╯'
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_composer_state "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT" )
+  [ "$out" = pending ] || fail "forced-Windows should preserve real composer text as pending after prompt-glyph strip, got '$out'"
+  pass "fm_backend_cmux_composer_state: forced-Windows strips the literal prompt glyph without losing real text"
+}
+
+test_composer_state_forced_posix_keeps_parameter_prompt_glyph_strip() {
+  local dir fb out
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      echo "skip: WINDOWS-DEFER fm_backend_cmux_composer_state forced-POSIX prompt-glyph strip - native Windows bash cannot emulate POSIX multibyte parameter expansion; POSIX branch stays enforced on ubuntu+WSL"
+      return 0 ;;
+  esac
+  dir="$TMP_ROOT/composer-posix-glyph-ghost"; mkdir -p "$dir/responses"
+  cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 2 $'  ╭────────────────────────╮\n  │ ❯ Type a message...    │\n  ╰──────── Composer ─────╯'
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_composer_state "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT" )
+  [ "$out" = empty ] || fail "forced-POSIX should keep the parameter-expansion prompt-glyph strip and classify ghost placeholder as empty, got '$out'"
+  pass "fm_backend_cmux_composer_state: forced-POSIX keeps the parameter-expansion prompt-glyph strip"
+}
+
 test_composer_state_real_text_is_pending() {
   local dir fb out
   dir="$TMP_ROOT/composer-pending"; mkdir -p "$dir/responses"
@@ -705,6 +788,18 @@ test_composer_state_real_text_is_pending() {
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_composer_state "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT" )
   [ "$out" = pending ] || fail "real unsubmitted text should read as pending, got '$out'"
   pass "fm_backend_cmux_composer_state: real composer text reads pending"
+}
+
+test_composer_state_strips_windows_jq_crlf_before_box_scan() {
+  local dir fb out
+  dir="$TMP_ROOT/composer-windows-crlf"; mkdir -p "$dir/responses"
+  cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  printf '{"text":"  +------------------------+\\r\\n  | > hello captain         |\\r\\n  +-------- Composer -------+\\r\\n\\r\\n  Enter:send\\r"}' > "$dir/responses/2.out"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_composer_state "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT" )
+  [ "$out" = pending ] || fail "forced-Windows composer scan should strip jq CRLF before matching the composer row, got '$out'"
+  pass "fm_backend_cmux_composer_state: forced-Windows strips jq CRLF before the composer-row scan"
 }
 
 # The popup-placeholder/second-Enter regression class (2026-07-03 herdr
@@ -960,7 +1055,11 @@ test_create_task_creates_and_parses_ids
 test_target_ready_fails_when_target_absent
 test_target_ready_checks_expected_label
 test_target_ready_rejects_label_mismatch
+test_target_ready_strips_windows_jq_cr_on_exact_title_compare
+test_target_ready_forced_posix_preserves_jq_cr_on_exact_title_compare
 test_capture_trims_locally
+test_capture_strips_windows_jq_crlf
+test_capture_forced_posix_preserves_jq_crlf
 test_capture_fails_when_read_screen_fails_empty
 test_capture_fails_when_target_not_ready
 test_send_key_normalizes_and_targets
@@ -969,7 +1068,10 @@ test_send_literal_uses_separator_for_option_shaped_text
 test_current_path_probes_with_marker
 test_composer_state_bare_prompt_is_empty
 test_composer_state_ghost_placeholder_is_empty
+test_composer_state_forced_windows_literal_prompt_glyph_strip
+test_composer_state_forced_posix_keeps_parameter_prompt_glyph_strip
 test_composer_state_real_text_is_pending
+test_composer_state_strips_windows_jq_crlf_before_box_scan
 test_composer_state_popup_placeholder_fill_is_pending
 test_composer_state_unknown_on_capture_failure
 test_composer_state_unknown_when_no_composer_row_found

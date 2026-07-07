@@ -106,6 +106,8 @@
 # file's own unit tests, which source it directly, resolve sanely. Mirrors
 # bin/backends/zellij.sh's identical fallback.
 FM_BACKEND_CMUX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=bin/fm-platform-lib.sh
+. "$FM_BACKEND_CMUX_ROOT/bin/fm-platform-lib.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_BACKEND_CMUX_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
@@ -171,6 +173,14 @@ fm_backend_cmux_cli() {  # <cmux-subcommand-and-args...>
     CMUX_QUIET=1 CMUX_SOCKET_PASSWORD="$pw" "$bin" "$@"
   else
     CMUX_QUIET=1 "$bin" "$@"
+  fi
+}
+
+fm_backend_cmux_strip_windows_cr() {
+  if fm_platform_is_windows; then
+    tr -d '\r'
+  else
+    cat
   fi
 }
 
@@ -324,13 +334,15 @@ fm_backend_cmux_scoped_title() {  # <fm-task-label>
 fm_backend_cmux_workspace_id_for_label() {  # <label>
   local label=$1
   fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null \
-    | jq -r --arg want "$label" '.workspaces[]? | select(.title == $want) | .id' 2>/dev/null | head -1
+    | jq -r --arg want "$label" '.workspaces[]? | select(.title == $want) | .id' 2>/dev/null \
+    | fm_backend_cmux_strip_windows_cr | head -1
 }
 
 fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
   local wsid=$1
   fm_backend_cmux_cli list-panes --workspace "$wsid" --json --id-format uuids 2>/dev/null \
-    | jq -r '.panes[0] // {} | .selected_surface_id // (.surface_ids[0] // empty)' 2>/dev/null
+    | jq -r '.panes[0] // {} | .selected_surface_id // (.surface_ids[0] // empty)' 2>/dev/null \
+    | fm_backend_cmux_strip_windows_cr
 }
 
 # fm_backend_cmux_create_task: create the task's workspace (one surface),
@@ -404,7 +416,7 @@ fm_backend_cmux_target_ready() {  # <target> [expected-label]
   fm_backend_cmux_parse_target "$1" || return 1
   if [ -n "$expected_label" ]; then
     expected_title=$(fm_backend_cmux_scoped_title "$expected_label")
-    title=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null | jq -r --arg id "$FM_BACKEND_CMUX_WORKSPACE" '.workspaces[]? | select(.id == $id) | .title' 2>/dev/null)
+    title=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null | jq -r --arg id "$FM_BACKEND_CMUX_WORKSPACE" '.workspaces[]? | select(.id == $id) | .title' 2>/dev/null | fm_backend_cmux_strip_windows_cr)
     if [ "$title" = "$expected_title" ]; then
       fm_backend_cmux_surface_exists "$FM_BACKEND_CMUX_WORKSPACE" "$FM_BACKEND_CMUX_SURFACE" && return 0
       wsid=$FM_BACKEND_CMUX_WORKSPACE
@@ -516,7 +528,7 @@ fm_backend_cmux_capture() {  # <target> <lines> [expected-label]
   fetch=$lines
   case "$fetch" in ''|*[!0-9]*) fetch=200 ;; *) [ "$fetch" -ge 200 ] || fetch=200 ;; esac
   raw=$(fm_backend_cmux_cli read-screen --workspace "$FM_BACKEND_CMUX_WORKSPACE" --surface "$FM_BACKEND_CMUX_SURFACE" --scrollback --lines "$fetch" --json 2>/dev/null) || return 1
-  out=$(printf '%s' "$raw" | jq -r '.text // empty' 2>/dev/null) || return 1
+  out=$(printf '%s' "$raw" | jq -r '.text // empty' 2>/dev/null | fm_backend_cmux_strip_windows_cr) || return 1
   printf '%s' "$out" | tail -n "$lines"
 }
 
@@ -557,10 +569,19 @@ fm_backend_cmux_composer_state() {  # <target> [expected-label] -> empty|pending
   case "$stripped" in
     '❯'|'>'|'$'|'%'|'#') printf 'empty'; return 0 ;;
   esac
+  if fm_platform_is_windows; then
+    # msys2 bash ${x#??} is byte-oriented and mangles the multibyte prompt glyph;
+    # strip the exact literal prompt prefix instead.
+    case "$stripped" in
+      '❯ '*) stripped=${stripped#'❯ '} ;; '> '*) stripped=${stripped#'> '} ;; '$ '*) stripped=${stripped#'$ '} ;; '% '*) stripped=${stripped#'% '} ;; '# '*) stripped=${stripped#'# '} ;;
+      '❯'*) stripped=${stripped#'❯'} ;; '>'*) stripped=${stripped#'>'} ;; '$'*) stripped=${stripped#'$'} ;; '%'*) stripped=${stripped#'%'} ;; '#'*) stripped=${stripped#'#'} ;;
+    esac
+  else
   case "$stripped" in
     '❯ '*|'> '*|'$ '*|'% '*|'# '*) stripped=${stripped#??} ;;
     '❯'*|'>'*|'$'*|'%'*|'#'*) stripped=${stripped#?} ;;
   esac
+  fi
   stripped="${stripped#"${stripped%%[![:space:]]*}"}"
   stripped="${stripped%"${stripped##*[![:space:]]}"}"
   [ -n "$stripped" ] || { printf 'empty'; return 0; }
@@ -625,5 +646,5 @@ fm_backend_cmux_list_live() {
     sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
     [ -n "$sfid" ] || continue
     printf '%s:%s\tfm-%s\n' "$wsid" "$sfid" "$plain"
-  done < <(printf '%s' "$wss" | jq -r --arg prefix "$prefix" '.workspaces[]? | select(.title | startswith($prefix)) | "\(.id)\t\(.title)"' 2>/dev/null)
+  done < <(printf '%s' "$wss" | jq -r --arg prefix "$prefix" '.workspaces[]? | select(.title | startswith($prefix)) | "\(.id)\t\(.title)"' 2>/dev/null | fm_backend_cmux_strip_windows_cr)
 }
