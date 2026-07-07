@@ -397,6 +397,7 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
   # distinction cannot afford to do.
   out=$(fm_backend_herdr_cli "$session" pane get "$pane_id" 2>&1)
   code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
+  code=$(printf '%s' "$code" | fm_backend_herdr_windows_strip_cr)
   if [ -n "$code" ]; then
     [ "$code" = "pane_not_found" ] && printf 'dead' || printf 'unknown'
     return 0
@@ -409,11 +410,13 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
   fi
   out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>&1)
   code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
+  code=$(printf '%s' "$code" | fm_backend_herdr_windows_strip_cr)
   if [ -n "$code" ]; then
     [ "$code" = "agent_not_found" ] && printf 'no-agent' || printf 'unknown'
     return 0
   fi
   status=$(printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
+  status=$(printf '%s' "$status" | fm_backend_herdr_windows_strip_cr)
   case "$status" in
     working|idle|done|blocked) printf 'live' ;;
     *) printf 'unknown' ;;

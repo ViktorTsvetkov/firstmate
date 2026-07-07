@@ -1071,6 +1071,43 @@ test_windows_pane_agent_state_strips_cr_before_pane_id_round_trip_compare() {
   pass "fm_backend_herdr_pane_agent_state: Windows branch strips CR before pane_id round-trip compare"
 }
 
+test_windows_pane_agent_state_strips_cr_before_pane_not_found_compare() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-pane-not-found-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"error":{"code":"pane_not_found\r","message":"pane w1:p2 not found"}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2' "$ROOT" )
+  [ "$out" = dead ] || fail "Windows pane_agent_state should strip CR before pane_not_found compare, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: Windows branch strips CR before pane_not_found compare"
+}
+
+test_windows_pane_agent_state_strips_cr_before_agent_not_found_compare() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-agent-not-found-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2"}}}' > "$resp/1.out"
+  printf '%s\n' '{"error":{"code":"agent_not_found\r","message":"agent target w1:p2 not found"}}' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2' "$ROOT" )
+  [ "$out" = no-agent ] || fail "Windows pane_agent_state should strip CR before agent_not_found compare, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: Windows branch strips CR before agent_not_found compare"
+}
+
+test_windows_pane_agent_state_strips_cr_before_agent_status_compare() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-status-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2"}}}' > "$resp/1.out"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"idle\r"}}}' > "$resp/2.out"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p3"}}}' > "$resp/3.out"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"working\r"}}}' > "$resp/4.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2; printf "\n"; fm_backend_herdr_pane_agent_state fmtest w1:p3' "$ROOT" )
+  [ "$out" = $'live\nlive' ] || fail "Windows pane_agent_state should strip CR before idle/working status compares, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: Windows branch strips CR before agent_status compares"
+}
+
 test_posix_pane_agent_state_preserves_cr_sensitive_pane_id_round_trip() {
   local dir log resp fb out
   dir="$TMP_ROOT/pane-agent-cr-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -1080,6 +1117,43 @@ test_posix_pane_agent_state_preserves_cr_sensitive_pane_id_round_trip() {
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2' "$ROOT" )
   [ "$out" = unknown ] || fail "POSIX pane_agent_state must preserve existing CR-sensitive pane_id round-trip behavior, got '$out'"
   pass "fm_backend_herdr_pane_agent_state: POSIX branch preserves CR-sensitive pane_id round-trip behavior"
+}
+
+test_posix_pane_agent_state_classifies_plain_pane_not_found() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-pane-not-found-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"error":{"code":"pane_not_found","message":"pane w1:p2 not found"}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2' "$ROOT" )
+  [ "$out" = dead ] || fail "POSIX pane_agent_state should classify plain pane_not_found as dead, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: POSIX branch classifies plain pane_not_found"
+}
+
+test_posix_pane_agent_state_classifies_plain_agent_not_found() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-agent-not-found-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2"}}}' > "$resp/1.out"
+  printf '%s\n' '{"error":{"code":"agent_not_found","message":"agent target w1:p2 not found"}}' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2' "$ROOT" )
+  [ "$out" = no-agent ] || fail "POSIX pane_agent_state should classify plain agent_not_found as no-agent, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: POSIX branch classifies plain agent_not_found"
+}
+
+test_posix_pane_agent_state_classifies_plain_agent_status() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-status-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2"}}}' > "$resp/1.out"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"idle"}}}' > "$resp/2.out"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p3"}}}' > "$resp/3.out"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"working"}}}' > "$resp/4.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2; printf "\n"; fm_backend_herdr_pane_agent_state fmtest w1:p3' "$ROOT" )
+  [ "$out" = $'live\nlive' ] || fail "POSIX pane_agent_state should classify plain idle/working statuses as live, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: POSIX branch classifies plain agent_status values"
 }
 
 # --- busy_state (semantic agent state) ---------------------------------------
@@ -1659,7 +1733,13 @@ test_windows_current_path_normalizes_foreground_cwd_to_posix
 test_posix_current_path_leaves_foreground_cwd_byte_identical
 test_posix_current_path_empty_cwd_emits_no_bytes
 test_windows_pane_agent_state_strips_cr_before_pane_id_round_trip_compare
+test_windows_pane_agent_state_strips_cr_before_pane_not_found_compare
+test_windows_pane_agent_state_strips_cr_before_agent_not_found_compare
+test_windows_pane_agent_state_strips_cr_before_agent_status_compare
 test_posix_pane_agent_state_preserves_cr_sensitive_pane_id_round_trip
+test_posix_pane_agent_state_classifies_plain_pane_not_found
+test_posix_pane_agent_state_classifies_plain_agent_not_found
+test_posix_pane_agent_state_classifies_plain_agent_status
 test_busy_state_working_maps_to_busy
 test_busy_state_done_and_blocked_map_to_idle
 test_busy_state_unknown_on_no_agent
