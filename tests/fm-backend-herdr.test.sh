@@ -973,24 +973,22 @@ test_parse_target() {
 }
 
 test_windows_parse_target_strips_cr_from_session_and_pane() {
-  (
-    export FM_PLATFORM_IS_WINDOWS=yes
-    . "$ROOT/bin/backends/herdr.sh"
-    fm_backend_herdr_parse_target $'default\r:w1:p2\r' || exit 1
+  FM_PLATFORM_IS_WINDOWS=yes bash -c '
+    . "$1/bin/backends/herdr.sh"
+    fm_backend_herdr_parse_target "$2" || exit 1
     [ "$FM_BACKEND_HERDR_SESSION" = default ] || { echo "session mismatch: $FM_BACKEND_HERDR_SESSION" >&2; exit 1; }
     [ "$FM_BACKEND_HERDR_PANE" = "w1:p2" ] || { echo "pane mismatch: $FM_BACKEND_HERDR_PANE" >&2; exit 1; }
-  ) || fail "Windows parse_target should strip CR from session and pane"
+  ' _ "$ROOT" $'default\r:w1:p2\r' || fail "Windows parse_target should strip CR from session and pane"
   pass "fm_backend_herdr_parse_target: Windows branch strips CR from session and pane"
 }
 
 test_posix_parse_target_preserves_cr_bytes() {
-  (
-    export FM_PLATFORM_IS_WINDOWS=no
-    . "$ROOT/bin/backends/herdr.sh"
-    fm_backend_herdr_parse_target $'default\r:w1:p2\r' || exit 1
-    [ "$FM_BACKEND_HERDR_SESSION" = $'default\r' ] || { echo "session mismatch: $FM_BACKEND_HERDR_SESSION" >&2; exit 1; }
-    [ "$FM_BACKEND_HERDR_PANE" = $'w1:p2\r' ] || { echo "pane mismatch: $FM_BACKEND_HERDR_PANE" >&2; exit 1; }
-  ) || fail "POSIX parse_target must preserve CR bytes"
+  FM_PLATFORM_IS_WINDOWS=no bash -c '
+    . "$1/bin/backends/herdr.sh"
+    fm_backend_herdr_parse_target "$2" || exit 1
+    [ "$FM_BACKEND_HERDR_SESSION" = $'"'"'default\r'"'"' ] || { echo "session mismatch: $FM_BACKEND_HERDR_SESSION" >&2; exit 1; }
+    [ "$FM_BACKEND_HERDR_PANE" = $'"'"'w1:p2\r'"'"' ] || { echo "pane mismatch: $FM_BACKEND_HERDR_PANE" >&2; exit 1; }
+  ' _ "$ROOT" $'default\r:w1:p2\r' || fail "POSIX parse_target must preserve CR bytes"
   pass "fm_backend_herdr_parse_target: POSIX branch preserves CR bytes"
 }
 
