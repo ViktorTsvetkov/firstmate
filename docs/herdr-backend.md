@@ -419,6 +419,35 @@ spawned husklivefix2 harness=sh kind=ship mode=no-mistakes yolo=off window=fm-hu
 The pane capture showed PowerShell starting `C:\PROGRA~1\Git\usr\bin\bash.exe -l`, `treehouse get` entering `~\.treehouse\scratch-project-0fc173\1\scratch-project`, the marked `pwd` probe returning `/c/Users/viktor/.treehouse/scratch-project-0fc173/1/scratch-project`, and the raw launch command printing `live-herdr-ok` from that same worktree.
 `bin/fm-teardown.sh husklivefix2` then returned the treehouse worktree and closed the herdr pane.
 
+### Native Windows session-lock verification (2026-07-08)
+
+Verified on native Windows Git Bash against real herdr 0.7.1-preview.2026-06-30-3459798b606d with an isolated `HERDR_SESSION=fm-lock-liveclaude4-19703` and a real herdr-launched Claude agent.
+This reproduced the boot-blocker first: a command run inside a plain herdr pane had `HERDR_ENV=1`, `HERDR_PANE_ID=w1:p2`, Git Bash `PPID=1`, and `bin/fm-lock.sh` printed `error: cannot locate harness process in ancestry`.
+The fixed path was then verified by launching Claude through herdr, submitting a Bash-tool command that ran `fm-lock.sh`, and checking the scratch lock directory.
+
+The exact herdr launch shape was:
+
+```bash
+herdr agent start claude --cwd "C:\Users\viktor\.treehouse\firstmate-upstream-0bcca5\3\firstmate-upstream" --workspace w1 --env FM_STATE_OVERRIDE=/tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703 --env FM_PLATFORM_IS_WINDOWS=yes --session fm-lock-liveclaude4-19703 -- claude --allowedTools Bash --allow-dangerously-skip-permissions
+herdr agent send claude "Use the Bash tool to run exactly: cd /c/Users/viktor/.treehouse/firstmate-upstream-0bcca5/3/firstmate-upstream && FM_STATE_OVERRIDE=/tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703 FM_PLATFORM_IS_WINDOWS=yes ./bin/fm-lock.sh; printf 'LOCKFILE='; cat /tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703/.lock 2>/dev/null || true; printf 'HERDRSIDE='; cat /tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703/.lock.herdr 2>/dev/null || true" --session fm-lock-liveclaude4-19703
+herdr pane send-keys w1:p2 enter --session fm-lock-liveclaude4-19703
+```
+
+The verification poll showed herdr still had the live Claude agent:
+
+```json
+{"agent":"claude","agent_status":"working","name":"claude","pane_id":"w1:p2","workspace_id":"w1"}
+```
+
+The scratch lock state then contained:
+
+```text
+lock=19775
+sidecar=pid=19775;session=fm-lock-liveclaude4-19703;pane=w1:p2;agent=claude;
+```
+
+That proves a herdr-launched Claude tool command can acquire the firstmate session lock on native Windows after the ancestry walk fails, while preserving a live PID plus herdr session/pane/agent metadata for stale-lock checks.
+
 ## Known gaps and follow-up notes
 
 - **No `events.subscribe` native push.** The busy-state semantic read (`agent.get`) is consumed through the EXISTING `fm-watch.sh` poll loop (same 15-second cadence as every other window), not a persistent async subscriber pushing events directly into the wake queue.

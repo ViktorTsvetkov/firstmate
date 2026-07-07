@@ -88,6 +88,7 @@ EOF
   case "$field" in
     pid) printf '%s\n' "$pid_f" ;;
     ppid) printf '%s\n' "$ppid" ;;
+    pgid) printf '%s\n' "$_pgid" ;;
     comm) printf '%s\n' "$command" ;;
     args|command) printf '%s\n' "$command" ;;
     stime) printf '%s\n' "$stime" ;;
