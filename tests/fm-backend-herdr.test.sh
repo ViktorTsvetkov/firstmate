@@ -251,6 +251,18 @@ test_version_check_accepts_current_protocol() {
   pass "fm_backend_herdr_version_check: accepts the current protocol (14)"
 }
 
+test_windows_version_check_strips_cr_from_protocol_compare() {
+  local dir log resp fb status
+  dir="$TMP_ROOT/version-protocol-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"client":{"version":"0.7.1","channel":"stable","protocol":"14\r"}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_version_check' "$ROOT"
+  status=$?
+  expect_code 0 "$status" "Windows version_check should accept CR-tainted current protocol"
+  pass "fm_backend_herdr_version_check: Windows branch strips CR before protocol compare"
+}
+
 test_version_check_refuses_old_protocol() {
   local dir log resp fb out status
   dir="$TMP_ROOT/version-old"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -370,6 +382,46 @@ test_posix_server_start_keeps_existing_subshell_launch() {
   pass "fm_backend_herdr_server_start: POSIX branch keeps the existing backgrounded subshell launch and never calls nohup"
 }
 
+test_windows_server_ensure_strips_cr_from_running_status() {
+  local dir log resp fb
+  dir="$TMP_ROOT/server-ensure-running-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"server":{"running":"true\r"}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT"
+  expect_code 0 $? "Windows server_ensure should accept CR-tainted true status"
+  assert_not_contains "$(cat "$log")" $'\x1f''server' \
+    "Windows server_ensure should not start the server when status reports true with CR"
+  pass "fm_backend_herdr_server_ensure: Windows branch strips CR before initial running compare"
+}
+
+test_windows_server_ensure_strips_cr_from_poll_status() {
+  local dir log resp fb
+  dir="$TMP_ROOT/server-ensure-poll-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"server":{"running":false}}' > "$resp/1.out"
+  printf '%s\n' '{"server":{"running":"true\r"}}' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_start() { return 0; }; fm_backend_herdr_server_ensure fmtest' "$ROOT"
+  expect_code 0 $? "Windows server_ensure should accept CR-tainted true poll status"
+  [ "$(grep -c $'\x1f''status'$'\x1f''--json' "$log")" = 2 ] \
+    || fail "Windows server_ensure should poll status once after initial false status; log: $(cat "$log")"
+  pass "fm_backend_herdr_server_ensure: Windows branch strips CR before poll running compare"
+}
+
+test_posix_server_ensure_accepts_plain_running_status() {
+  local dir log resp fb
+  dir="$TMP_ROOT/server-ensure-running-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"server":{"running":true}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT"
+  expect_code 0 $? "POSIX server_ensure should accept plain true status"
+  assert_not_contains "$(cat "$log")" $'\x1f''server' \
+    "POSIX server_ensure should not start the server when status reports true"
+  pass "fm_backend_herdr_server_ensure: POSIX branch keeps plain running compare behavior"
+}
+
 # --- container_ensure / create_task ------------------------------------------
 
 test_container_ensure_starts_server_and_workspace() {
@@ -422,6 +474,74 @@ test_create_task_refuses_duplicate_label() {
   [ "$status" -ne 0 ] || fail "create_task should refuse an existing tab label (herdr itself does not enforce uniqueness)"
   assert_contains "$out" "already exists" "create_task did not report the duplicate label"
   pass "fm_backend_herdr_create_task: refuses a duplicate tab label (herdr's own tab create has no uniqueness check)"
+}
+
+test_windows_prune_default_tab_strips_cr_before_exact_label_compare() {
+  local dir log resp fb
+  dir="$TMP_ROOT/prune-cr-label-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"tseed","label":"1\r"},{"tab_id":"tkeep","label":"fm-real"}]}}' > "$resp/1.out"
+  printf '%s\n' '{"result":{"panes":[{"tab_id":"tseed","pane_id":"w1:pseed\r"}]}}' > "$resp/2.out"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"idle"}}}' > "$resp/3.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_prune_seeded_default_tab fmtest w1 tseed' "$ROOT"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''close'$'\x1f''w1:pseed' \
+    "Windows prune should strip CR before label/pane exact handling and close the seeded tab"
+  pass "fm_backend_herdr_workspace_prune_seeded_default_tab: Windows branch strips CR before exact label compare"
+}
+
+test_posix_prune_default_tab_preserves_cr_label_behavior() {
+  local dir log resp fb
+  dir="$TMP_ROOT/prune-cr-label-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"tseed","label":"1\r"},{"tab_id":"tkeep","label":"fm-real"}]}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_prune_seeded_default_tab fmtest w1 tseed' "$ROOT"
+  assert_no_grep $'\x1f''pane'$'\x1f''close' "$log" \
+    "POSIX prune must preserve existing CR-sensitive label compare behavior"
+  pass "fm_backend_herdr_workspace_prune_seeded_default_tab: POSIX branch preserves CR-sensitive exact label compare"
+}
+
+test_windows_prune_default_tab_refuses_cr_tainted_working_agent() {
+  local dir log resp fb
+  dir="$TMP_ROOT/prune-working-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"tseed","label":"1"},{"tab_id":"tkeep","label":"fm-real"}]}}' > "$resp/1.out"
+  printf '%s\n' '{"result":{"panes":[{"tab_id":"tseed","pane_id":"w1:pseed"}]}}' > "$resp/2.out"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"working\r"}}}' > "$resp/3.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_prune_seeded_default_tab fmtest w1 tseed' "$ROOT"
+  assert_no_grep $'\x1f''pane'$'\x1f''close' "$log" \
+    "Windows prune must strip CR before working-agent guard and refuse to close"
+  pass "fm_backend_herdr_workspace_prune_seeded_default_tab: Windows branch strips CR before working-agent guard"
+}
+
+test_posix_prune_default_tab_refuses_plain_working_agent() {
+  local dir log resp fb
+  dir="$TMP_ROOT/prune-working-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"tseed","label":"1"},{"tab_id":"tkeep","label":"fm-real"}]}}' > "$resp/1.out"
+  printf '%s\n' '{"result":{"panes":[{"tab_id":"tseed","pane_id":"w1:pseed"}]}}' > "$resp/2.out"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"working"}}}' > "$resp/3.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_prune_seeded_default_tab fmtest w1 tseed' "$ROOT"
+  assert_no_grep $'\x1f''pane'$'\x1f''close' "$log" \
+    "POSIX prune should refuse to close when the pane reports a working agent"
+  pass "fm_backend_herdr_workspace_prune_seeded_default_tab: POSIX branch refuses a plain working agent"
+}
+
+test_posix_prune_default_tab_closes_plain_idle_agent() {
+  local dir log resp fb
+  dir="$TMP_ROOT/prune-idle-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"tseed","label":"1"},{"tab_id":"tkeep","label":"fm-real"}]}}' > "$resp/1.out"
+  printf '%s\n' '{"result":{"panes":[{"tab_id":"tseed","pane_id":"w1:pseed"}]}}' > "$resp/2.out"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"idle"}}}' > "$resp/3.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_prune_seeded_default_tab fmtest w1 tseed' "$ROOT"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''close'$'\x1f''w1:pseed' \
+    "POSIX prune should close the seeded default tab when the agent is not working"
+  pass "fm_backend_herdr_workspace_prune_seeded_default_tab: POSIX branch closes a non-working seeded default tab"
 }
 
 # --- restored-layout husk close-and-replace (herdr session.json restore) -----
@@ -815,6 +935,32 @@ test_list_live_scoped_to_this_homes_workspace_only() {
   pass "fm_backend_herdr_list_live: scoped to this home's own workspace, never a sibling home's"
 }
 
+test_windows_list_live_strips_cr_from_fm_label_and_pane_values() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/list-live-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"}]}}' > "$resp/1.out"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"t1","label":"fm-crlf\r","workspace_id":"w1"}]}}' > "$resp/2.out"
+  printf '%s\n' '{"result":{"panes":[{"tab_id":"t1","pane_id":"w1:p2\r"}]}}' > "$resp/3.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_list_live fmtest' "$ROOT" )
+  [ "$out" = $'fmtest:w1:p2\tfm-crlf' ] || fail "Windows list_live should strip CR from fm-* label and pane values, got '$out'"
+  pass "fm_backend_herdr_list_live: Windows branch strips CR from fm-* label and pane values"
+}
+
+test_posix_list_live_preserves_cr_in_fm_label_and_pane_values() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/list-live-cr-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"}]}}' > "$resp/1.out"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"t1","label":"fm-crlf\r","workspace_id":"w1"}]}}' > "$resp/2.out"
+  printf '%s\n' '{"result":{"panes":[{"tab_id":"t1","pane_id":"w1:p2\r"}]}}' > "$resp/3.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_list_live fmtest' "$ROOT" )
+  [ "$out" = $'fmtest:w1:p2\r\tfm-crlf\r' ] || fail "POSIX list_live must preserve CR bytes in fm-* label and pane values, got '$out'"
+  pass "fm_backend_herdr_list_live: POSIX branch preserves CR bytes in fm-* label and pane values"
+}
+
 # --- target parsing, key normalization ---------------------------------------
 
 test_parse_target() {
@@ -824,6 +970,26 @@ test_parse_target() {
     [ "$FM_BACKEND_HERDR_PANE" = "w1:p2" ] || { echo "pane mismatch: $FM_BACKEND_HERDR_PANE" >&2; exit 1; }
   ) || fail "fm_backend_herdr_parse_target did not split session:pane on the first colon only"
   pass "fm_backend_herdr_parse_target: splits '<session>:<pane_id>' on the FIRST colon (pane_id itself contains one)"
+}
+
+test_windows_parse_target_strips_cr_from_session_and_pane() {
+  FM_PLATFORM_IS_WINDOWS=yes bash -c '
+    . "$1/bin/backends/herdr.sh"
+    fm_backend_herdr_parse_target "$2" || exit 1
+    [ "$FM_BACKEND_HERDR_SESSION" = default ] || { echo "session mismatch: $FM_BACKEND_HERDR_SESSION" >&2; exit 1; }
+    [ "$FM_BACKEND_HERDR_PANE" = "w1:p2" ] || { echo "pane mismatch: $FM_BACKEND_HERDR_PANE" >&2; exit 1; }
+  ' _ "$ROOT" $'default\r:w1:p2\r' || fail "Windows parse_target should strip CR from session and pane"
+  pass "fm_backend_herdr_parse_target: Windows branch strips CR from session and pane"
+}
+
+test_posix_parse_target_preserves_cr_bytes() {
+  FM_PLATFORM_IS_WINDOWS=no bash -c '
+    . "$1/bin/backends/herdr.sh"
+    fm_backend_herdr_parse_target "$2" || exit 1
+    [ "$FM_BACKEND_HERDR_SESSION" = $'"'"'default\r'"'"' ] || { echo "session mismatch: $FM_BACKEND_HERDR_SESSION" >&2; exit 1; }
+    [ "$FM_BACKEND_HERDR_PANE" = $'"'"'w1:p2\r'"'"' ] || { echo "pane mismatch: $FM_BACKEND_HERDR_PANE" >&2; exit 1; }
+  ' _ "$ROOT" $'default\r:w1:p2\r' || fail "POSIX parse_target must preserve CR bytes"
+  pass "fm_backend_herdr_parse_target: POSIX branch preserves CR bytes"
 }
 
 test_normalize_key() {
@@ -885,6 +1051,28 @@ test_capture_preserves_pane_read_failure() {
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2' \
     "capture did not try to read the requested pane"
   pass "fm_backend_herdr_capture: ensures the session and preserves pane read failure"
+}
+
+test_windows_capture_strips_cr_from_crlf_pane_read() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/capture-crlf-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf 'line one\r\nline two\r\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_capture default:w1:p2 250' "$ROOT" )
+  [ "$out" = $'line one\nline two' ] || fail "Windows capture should strip CR from CRLF-framed pane read output, got '$out'"
+  pass "fm_backend_herdr_capture: Windows branch strips CR from CRLF-framed pane read output"
+}
+
+test_posix_capture_preserves_cr_byte_identical() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/capture-crlf-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf 'line one\r\nline two\r\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_capture default:w1:p2 250' "$ROOT" )
+  [ "$out" = $'line one\r\nline two\r' ] || fail "POSIX capture must preserve CR bytes, got '$out'"
+  pass "fm_backend_herdr_capture: POSIX branch preserves CR bytes byte-identical"
 }
 
 test_send_key_normalizes_and_targets_pane() {
@@ -952,6 +1140,114 @@ test_posix_current_path_leaves_foreground_cwd_byte_identical() {
   pass "fm_backend_herdr_current_path: POSIX branch leaves foreground_cwd unchanged and never calls cygpath"
 }
 
+test_posix_current_path_empty_cwd_emits_no_bytes() {
+  local dir log resp fb outfile
+  dir="$TMP_ROOT/cwd-empty-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; outfile="$dir/out"; : > "$log"
+  printf '%s\n' '{"result":{"pane":{"cwd":"/tmp/pane-creation-dir","foreground_cwd":""}}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_current_path default:w1:p2' "$ROOT" > "$outfile"
+  [ ! -s "$outfile" ] || fail "POSIX current_path empty foreground_cwd must emit no bytes, got $(wc -c < "$outfile") byte(s)"
+  pass "fm_backend_herdr_current_path: POSIX empty foreground_cwd emits no bytes"
+}
+
+test_windows_pane_agent_state_strips_cr_before_pane_id_round_trip_compare() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2\r"}}}' > "$resp/1.out"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"idle"}}}' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2' "$ROOT" )
+  [ "$out" = live ] || fail "Windows pane_agent_state should strip CR before pane_id round-trip compare, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: Windows branch strips CR before pane_id round-trip compare"
+}
+
+test_windows_pane_agent_state_strips_cr_before_pane_not_found_compare() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-pane-not-found-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"error":{"code":"pane_not_found\r","message":"pane w1:p2 not found"}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2' "$ROOT" )
+  [ "$out" = dead ] || fail "Windows pane_agent_state should strip CR before pane_not_found compare, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: Windows branch strips CR before pane_not_found compare"
+}
+
+test_windows_pane_agent_state_strips_cr_before_agent_not_found_compare() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-agent-not-found-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2"}}}' > "$resp/1.out"
+  printf '%s\n' '{"error":{"code":"agent_not_found\r","message":"agent target w1:p2 not found"}}' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2' "$ROOT" )
+  [ "$out" = no-agent ] || fail "Windows pane_agent_state should strip CR before agent_not_found compare, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: Windows branch strips CR before agent_not_found compare"
+}
+
+test_windows_pane_agent_state_strips_cr_before_agent_status_compare() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-status-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2"}}}' > "$resp/1.out"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"idle\r"}}}' > "$resp/2.out"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p3"}}}' > "$resp/3.out"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"working\r"}}}' > "$resp/4.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2; printf "\n"; fm_backend_herdr_pane_agent_state fmtest w1:p3' "$ROOT" )
+  [ "$out" = $'live\nlive' ] || fail "Windows pane_agent_state should strip CR before idle/working status compares, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: Windows branch strips CR before agent_status compares"
+}
+
+test_posix_pane_agent_state_preserves_cr_sensitive_pane_id_round_trip() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-cr-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2\r"}}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2' "$ROOT" )
+  [ "$out" = unknown ] || fail "POSIX pane_agent_state must preserve existing CR-sensitive pane_id round-trip behavior, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: POSIX branch preserves CR-sensitive pane_id round-trip behavior"
+}
+
+test_posix_pane_agent_state_classifies_plain_pane_not_found() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-pane-not-found-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"error":{"code":"pane_not_found","message":"pane w1:p2 not found"}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2' "$ROOT" )
+  [ "$out" = dead ] || fail "POSIX pane_agent_state should classify plain pane_not_found as dead, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: POSIX branch classifies plain pane_not_found"
+}
+
+test_posix_pane_agent_state_classifies_plain_agent_not_found() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-agent-not-found-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2"}}}' > "$resp/1.out"
+  printf '%s\n' '{"error":{"code":"agent_not_found","message":"agent target w1:p2 not found"}}' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2' "$ROOT" )
+  [ "$out" = no-agent ] || fail "POSIX pane_agent_state should classify plain agent_not_found as no-agent, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: POSIX branch classifies plain agent_not_found"
+}
+
+test_posix_pane_agent_state_classifies_plain_agent_status() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/pane-agent-status-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2"}}}' > "$resp/1.out"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"idle"}}}' > "$resp/2.out"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p3"}}}' > "$resp/3.out"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"working"}}}' > "$resp/4.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_state fmtest w1:p2; printf "\n"; fm_backend_herdr_pane_agent_state fmtest w1:p3' "$ROOT" )
+  [ "$out" = $'live\nlive' ] || fail "POSIX pane_agent_state should classify plain idle/working statuses as live, got '$out'"
+  pass "fm_backend_herdr_pane_agent_state: POSIX branch classifies plain agent_status values"
+}
+
 # --- busy_state (semantic agent state) ---------------------------------------
 
 test_busy_state_working_maps_to_busy() {
@@ -995,6 +1291,62 @@ test_busy_state_unknown_on_no_agent() {
   pass "fm_backend_herdr_busy_state: unparseable/absent agent state reports unknown, the regex-fallback cue"
 }
 
+test_windows_busy_state_strips_cr_before_working_compare() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/busy-working-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"working\r"}}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_busy_state default:w1:p2' "$ROOT" )
+  [ "$out" = busy ] || fail "Windows agent_status=working with CR should map to busy, got '$out'"
+  pass "fm_backend_herdr_busy_state: Windows branch strips CR before working -> busy compare"
+}
+
+test_posix_busy_state_plain_working_maps_to_busy() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/busy-working-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"working"}}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_busy_state default:w1:p2' "$ROOT" )
+  [ "$out" = busy ] || fail "POSIX agent_status=working should map to busy, got '$out'"
+  pass "fm_backend_herdr_busy_state: POSIX branch maps plain working -> busy"
+}
+
+test_windows_busy_state_strips_cr_before_idle_compares() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/busy-idle-cr-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"idle\r"}}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_busy_state default:w1:p2' "$ROOT" )
+  [ "$out" = idle ] || fail "Windows agent_status=idle with CR should map to idle, got '$out'"
+
+  printf '%s\n' '{"result":{"agent":{"agent_status":"done\r"}}}' > "$resp/1.out"
+  : > "$log"; rm -f "$resp/.count"
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_busy_state default:w1:p2' "$ROOT" )
+  [ "$out" = idle ] || fail "Windows agent_status=done with CR should map to idle, got '$out'"
+  pass "fm_backend_herdr_busy_state: Windows branch strips CR before idle/done -> idle compares"
+}
+
+test_posix_busy_state_plain_idle_done_map_to_idle() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/busy-idle-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"result":{"agent":{"agent_status":"idle"}}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_busy_state default:w1:p2' "$ROOT" )
+  [ "$out" = idle ] || fail "POSIX agent_status=idle should map to idle, got '$out'"
+
+  printf '%s\n' '{"result":{"agent":{"agent_status":"done"}}}' > "$resp/1.out"
+  : > "$log"; rm -f "$resp/.count"
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_busy_state default:w1:p2' "$ROOT" )
+  [ "$out" = idle ] || fail "POSIX agent_status=done should map to idle, got '$out'"
+  pass "fm_backend_herdr_busy_state: POSIX branch maps plain idle/done -> idle"
+}
+
 # --- composer_state: structural border-row classification --------------------
 
 test_composer_state_bare_prompt_is_empty() {
@@ -1028,6 +1380,17 @@ test_composer_state_real_text_is_pending() {
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
   [ "$out" = pending ] || fail "real unsubmitted text should read as pending, got '$out'"
   pass "fm_backend_herdr_composer_state: real composer text reads pending"
+}
+
+test_windows_composer_state_strips_cr_before_border_scan() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-crlf-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '  ╭────────────────────────╮\r\n  │ ❯                      │\r\n  ╰──────── Composer ─────╯\r\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = empty ] || fail "Windows composer_state should strip CR before border scan, got '$out'"
+  pass "fm_backend_herdr_composer_state: Windows branch strips CR before border scan"
 }
 
 # Live-verified incident (2026-07-03, real grok 0.2.82 on herdr, isolated
@@ -1461,6 +1824,7 @@ test_no_jq_reserved_keyword_arg_names() {
 . "$ROOT/bin/fm-backend.sh"
 
 test_version_check_accepts_current_protocol
+test_windows_version_check_strips_cr_from_protocol_compare
 test_version_check_refuses_old_protocol
 test_version_check_refuses_missing_herdr
 test_workspace_label_primary_home_no_marker
@@ -1471,6 +1835,9 @@ test_workspace_label_different_secondmates_get_different_labels
 test_cli_helper_sets_env_and_appends_trailing_session_flag
 test_windows_server_start_uses_detached_launch
 test_posix_server_start_keeps_existing_subshell_launch
+test_windows_server_ensure_strips_cr_from_running_status
+test_windows_server_ensure_strips_cr_from_poll_status
+test_posix_server_ensure_accepts_plain_running_status
 test_container_ensure_starts_server_and_workspace
 test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
@@ -1484,6 +1851,11 @@ test_label_collision_startup_workspace_leaves_live_tab_alone
 test_prune_refuses_a_working_agent_pane_defense_in_depth
 test_no_jq_reserved_keyword_arg_names
 test_create_task_refuses_duplicate_label
+test_windows_prune_default_tab_strips_cr_before_exact_label_compare
+test_posix_prune_default_tab_preserves_cr_label_behavior
+test_windows_prune_default_tab_refuses_cr_tainted_working_agent
+test_posix_prune_default_tab_refuses_plain_working_agent
+test_posix_prune_default_tab_closes_plain_idle_agent
 test_create_task_refuses_duplicate_label_when_agent_live
 test_create_task_refuses_when_any_duplicate_label_is_live
 test_create_task_closes_and_replaces_dead_pane_husk
@@ -1498,22 +1870,42 @@ test_windows_create_task_converts_cwd_for_tab_create
 test_posix_create_task_leaves_tab_cwd_byte_identical
 test_workspace_find_matches_only_this_homes_own_label
 test_list_live_scoped_to_this_homes_workspace_only
+test_windows_list_live_strips_cr_from_fm_label_and_pane_values
+test_posix_list_live_preserves_cr_in_fm_label_and_pane_values
 test_parse_target
+test_windows_parse_target_strips_cr_from_session_and_pane
+test_posix_parse_target_preserves_cr_bytes
 test_normalize_key
 test_capture_calls_pane_read
 test_capture_works_around_small_lines_bug
 test_capture_preserves_pane_read_failure
+test_windows_capture_strips_cr_from_crlf_pane_read
+test_posix_capture_preserves_cr_byte_identical
 test_send_key_normalizes_and_targets_pane
 test_kill_is_best_effort
 test_current_path_reads_cwd
 test_windows_current_path_normalizes_foreground_cwd_to_posix
 test_posix_current_path_leaves_foreground_cwd_byte_identical
+test_posix_current_path_empty_cwd_emits_no_bytes
+test_windows_pane_agent_state_strips_cr_before_pane_id_round_trip_compare
+test_windows_pane_agent_state_strips_cr_before_pane_not_found_compare
+test_windows_pane_agent_state_strips_cr_before_agent_not_found_compare
+test_windows_pane_agent_state_strips_cr_before_agent_status_compare
+test_posix_pane_agent_state_preserves_cr_sensitive_pane_id_round_trip
+test_posix_pane_agent_state_classifies_plain_pane_not_found
+test_posix_pane_agent_state_classifies_plain_agent_not_found
+test_posix_pane_agent_state_classifies_plain_agent_status
 test_busy_state_working_maps_to_busy
 test_busy_state_done_and_blocked_map_to_idle
 test_busy_state_unknown_on_no_agent
+test_windows_busy_state_strips_cr_before_working_compare
+test_posix_busy_state_plain_working_maps_to_busy
+test_windows_busy_state_strips_cr_before_idle_compares
+test_posix_busy_state_plain_idle_done_map_to_idle
 test_composer_state_bare_prompt_is_empty
 test_composer_state_ghost_placeholder_is_empty
 test_composer_state_real_text_is_pending
+test_windows_composer_state_strips_cr_before_border_scan
 test_composer_state_popup_placeholder_fill_is_pending
 test_composer_state_unknown_on_capture_failure
 test_composer_state_unknown_when_no_composer_row_found
