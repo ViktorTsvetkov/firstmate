@@ -57,7 +57,8 @@ jobs:
           set -eu
           # Empirically green under Git Bash on Windows as of Phase 1.
           # Deferred from this leg: fm-backend, fm-backend-herdr, fm-backend-orca,
-          # fm-secondmate-lifecycle-e2e, fm-secondmate-safety, and fm-teardown.
+          # fm-secondmate-lifecycle-e2e, fm-secondmate-safety, fm-teardown, and
+          # fm-watcher-lock (windows-latest singleton timing failure).
           tests=(
             tests/fm-afk-inject-e2e.test.sh
             tests/fm-afk-inject-herdr-e2e.test.sh
@@ -96,7 +97,6 @@ jobs:
             tests/fm-update.test.sh
             tests/fm-wake-daemon-lifecycle-e2e.test.sh
             tests/fm-wake-queue.test.sh
-            tests/fm-watcher-lock.test.sh
             tests/fm-watch-triage.test.sh
             tests/fm-x-mode.test.sh
           )
