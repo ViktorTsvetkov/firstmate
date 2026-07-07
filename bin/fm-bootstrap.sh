@@ -7,6 +7,7 @@
 #                 "CREW_HARNESS_OVERRIDE: <name>",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
 #                 "CREW_DISPATCH: active config/crew-dispatch.json" plus indented rules,
+#                 "CLAUDE_MD: skipped|failed: <reason>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "TASKS_AXI: available", "TANGLE: <remediation>",
 #                 "SECONDMATE_SYNC: secondmate <id>: skipped: <reason>",
@@ -35,6 +36,9 @@
 #          config/backlog-backend=manual, a missing or incompatible tasks-axi is
 #          reported through the MISSING line and backlog operations fall back to
 #          manual editing until the captain approves installation.
+#          On native Windows, bootstrap replaces Git's checked-out CLAUDE.md
+#          symlink-placeholder text file with a real AGENTS.md mirror and marks
+#          it skip-worktree so the intentional divergence stays porcelain-clean.
 #          X mode is OPTIONAL and inert unless FM_HOME/.env has a non-empty
 #          FMX_PAIRING_TOKEN. When opted in, bootstrap requires curl+jq, writes
 #          the relay poll shim and 30s cadence config, and prints an FMX line.
@@ -42,15 +46,16 @@
 #          recovered and STUCK clone drift, and prunes gone local branches; it is
 #          bounded by FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT, default 20s.
 #          Set FM_FLEET_PRUNE=0 to skip branch pruning during that refresh.
-#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the three MUTATING sweeps
-#          (secondmate_sync, x_mode_setup, fleet_sync) while still printing
-#          every read-only detect line above; the TANGLE line switches to
-#          advisory-only wording with no checkout command. Used by
-#          fm-session-start.sh's read-only path when another live session holds
-#          the fleet lock, so a second concurrent session never race-mutates
-#          secondmate homes, X-mode artifacts, project clones, or repair
-#          instructions. Unset/0 (the default) runs every sweep exactly as
-#          before - this flag is purely additive.
+#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip native-Windows CLAUDE.md
+#          materialization and the three MUTATING sweeps (secondmate_sync,
+#          x_mode_setup, fleet_sync) while still printing every read-only detect
+#          line above; the TANGLE line switches to advisory-only wording with
+#          no checkout command. Used by fm-session-start.sh's read-only path
+#          when another live session holds the fleet lock, so a second
+#          concurrent session never race-mutates CLAUDE.md, secondmate homes,
+#          X-mode artifacts, project clones, or repair instructions. Unset/0
+#          (the default) runs every mutation exactly as before - this flag is
+#          purely additive.
 #        fm-bootstrap.sh install <tool>...
 #          Install the named tools (only ones the captain approved).
 set -u

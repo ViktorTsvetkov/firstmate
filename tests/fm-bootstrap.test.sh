@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Behavior tests for fm-bootstrap.sh tool detection.
+# Behavior tests for fm-bootstrap.sh tool detection and guarded bootstrap mutations.
 #
 # Bootstrap prints one block or line per problem or capability fact and is silent when all
 # is well. firstmate consumes the exact 'MISSING: treehouse (install: ...)',
