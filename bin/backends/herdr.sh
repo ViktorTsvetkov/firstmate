@@ -111,6 +111,19 @@ fm_backend_herdr_cwd_arg() {  # <posix-cwd>
   fi
 }
 
+fm_backend_herdr_shell_arg() {
+  local shell_path=${SHELL:-}
+  if [ -z "$shell_path" ]; then
+    shell_path=$(command -v bash 2>/dev/null || command -v sh 2>/dev/null || true)
+  fi
+  [ -n "$shell_path" ] || return 0
+  if fm_platform_is_windows; then
+    cygpath -w "$shell_path"
+  else
+    printf '%s' "$shell_path"
+  fi
+}
+
 fm_backend_herdr_server_start() {  # <session>
   local session=$1 pid
   if fm_platform_is_windows; then
@@ -484,7 +497,7 @@ fm_backend_herdr_tab_is_husk() {  # <session> <pane_id>
 # 4th arg, so this function never even queries for a prune candidate in that
 # case. Echoes "<tab_id> <pane_id>" on success.
 fm_backend_herdr_create_task() {  # <container> <label> <cwd> <seeded_default_tab_id>
-  local container=$1 label=$2 cwd=$3 seeded_tab_id=${4:-} session wsid list dup_tabs dup dup_pane dup_tab_ids out tab_id pane_id remaining_dup_tabs cwd_arg
+  local container=$1 label=$2 cwd=$3 seeded_tab_id=${4:-} session wsid list dup_tabs dup dup_pane dup_tab_ids out tab_id pane_id remaining_dup_tabs cwd_arg shell_arg
   session=${container%%:*}
   wsid=${container#*:}
   list=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 1
@@ -507,7 +520,12 @@ $dup_tabs
 EOF
   fi
   cwd_arg=$(fm_backend_herdr_cwd_arg "$cwd") || return 1
-  out=$(fm_backend_herdr_cli "$session" tab create --workspace "$wsid" --cwd "$cwd_arg" --label "$label" --no-focus 2>/dev/null) || return 1
+  shell_arg=$(fm_backend_herdr_shell_arg) || return 1
+  if [ -n "$shell_arg" ]; then
+    out=$(fm_backend_herdr_cli "$session" tab create --workspace "$wsid" --cwd "$cwd_arg" --label "$label" --no-focus --env "SHELL=$shell_arg" 2>/dev/null) || return 1
+  else
+    out=$(fm_backend_herdr_cli "$session" tab create --workspace "$wsid" --cwd "$cwd_arg" --label "$label" --no-focus 2>/dev/null) || return 1
+  fi
   tab_id=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
   pane_id=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
   if [ -z "$tab_id" ] || [ -z "$pane_id" ]; then
