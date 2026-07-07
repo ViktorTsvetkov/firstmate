@@ -162,6 +162,14 @@ fm_backend_herdr_session() {
   printf '%s' "${HERDR_SESSION:-default}"
 }
 
+fm_backend_herdr_windows_strip_cr() {
+  if fm_platform_is_windows; then
+    tr -d '\r'
+  else
+    cat
+  fi
+}
+
 # fm_backend_herdr_server_ensure: start the herdr server for <session>
 # headless (no TUI client) if not already running, mirroring tmux's `tmux
 # has-session || tmux new-session -d`. Verified: a bare socket CLI call does
@@ -250,6 +258,7 @@ fm_backend_herdr_workspace_prune_seeded_default_tab() {  # <session> <workspace_
   tab_count=$(printf '%s' "$tabs" | jq -r '.result.tabs? // [] | length' 2>/dev/null)
   case "$tab_count" in ''|*[!0-9]*|0|1) return 0 ;; esac
   current_label=$(printf '%s' "$tabs" | jq -r --arg t "$tab_id" '.result.tabs[]? | select(.tab_id == $t) | .label' 2>/dev/null)
+  current_label=$(printf '%s' "$current_label" | fm_backend_herdr_windows_strip_cr)
   [ "$current_label" = "1" ] || return 0
   pane_id=$(fm_backend_herdr_pane_for_tab "$session" "$wsid" "$tab_id") || return 0
   [ -n "$pane_id" ] || return 0
@@ -393,6 +402,7 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
     return 0
   fi
   pid=$(printf '%s' "$out" | jq -r '.result.pane.pane_id // empty' 2>/dev/null)
+  pid=$(printf '%s' "$pid" | fm_backend_herdr_windows_strip_cr)
   if [ "$pid" != "$pane_id" ]; then
     printf 'unknown'
     return 0
@@ -530,6 +540,8 @@ fm_backend_herdr_parse_target() {  # <target>
   local target=$1
   FM_BACKEND_HERDR_SESSION=${target%%:*}
   FM_BACKEND_HERDR_PANE=${target#*:}
+  FM_BACKEND_HERDR_SESSION=$(printf '%s' "$FM_BACKEND_HERDR_SESSION" | fm_backend_herdr_windows_strip_cr)
+  FM_BACKEND_HERDR_PANE=$(printf '%s' "$FM_BACKEND_HERDR_PANE" | fm_backend_herdr_windows_strip_cr)
   [ -n "$FM_BACKEND_HERDR_SESSION" ] && [ -n "$FM_BACKEND_HERDR_PANE" ] && [ "$FM_BACKEND_HERDR_PANE" != "$target" ]
 }
 
@@ -555,9 +567,10 @@ fm_backend_herdr_current_path() {  # <target>
   fm_backend_herdr_target_ready "$1" || return 0
   cwd=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
     | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null)
+  cwd=$(printf '%s' "$cwd" | fm_backend_herdr_windows_strip_cr)
   if [ -n "$cwd" ] && fm_platform_is_windows; then
     cygpath -u "$cwd"
-  else
+  elif [ -n "$cwd" ]; then
     printf '%s\n' "$cwd"
   fi
 }
@@ -623,6 +636,7 @@ fm_backend_herdr_capture() {  # <target> <lines>
   fetch=$lines
   case "$fetch" in ''|*[!0-9]*) fetch=200 ;; *) [ "$fetch" -ge 200 ] || fetch=200 ;; esac
   out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane read "$FM_BACKEND_HERDR_PANE" --source recent --lines "$fetch" 2>/dev/null) || return 1
+  out=$(printf '%s' "$out" | fm_backend_herdr_windows_strip_cr)
   printf '%s' "$out" | tail -n "$lines"
 }
 
@@ -659,6 +673,7 @@ FM_BACKEND_HERDR_IDLE_RE=${FM_BACKEND_HERDR_IDLE_RE:-'^Type a message\.\.\.$'}
 fm_backend_herdr_composer_state() {  # <target> -> empty|pending|unknown
   local target=$1 cap line trimmed stripped="" found=0
   cap=$(fm_backend_herdr_capture "$target" "$FM_BACKEND_HERDR_COMPOSER_LINES") || { printf 'unknown'; return 0; }
+  cap=$(printf '%s' "$cap" | fm_backend_herdr_windows_strip_cr)
   while IFS= read -r line; do
     trimmed="${line#"${line%%[![:space:]]*}"}"
     trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
@@ -771,7 +786,7 @@ fm_backend_herdr_pane_for_tab() {  # <session> <workspace_id> <tab_id>
   local session=$1 wsid=$2 tab_id=$3 panes
   panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$wsid" 2>/dev/null) || return 1
   printf '%s' "$panes" | jq -r --arg tab "$tab_id" \
-    '.result.panes[]? | select(.tab_id == $tab) | .pane_id' 2>/dev/null | head -1
+    '.result.panes[]? | select(.tab_id == $tab) | .pane_id' 2>/dev/null | head -1 | fm_backend_herdr_windows_strip_cr
 }
 
 # fm_backend_herdr_resolve_bare_selector: the live-tab-listing fallback for an
@@ -819,6 +834,8 @@ fm_backend_herdr_list_live() {  # <session>
   [ -n "$wsid" ] || return 0
   tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 0
   while IFS=$'\t' read -r tab_id label; do
+    tab_id=$(printf '%s' "$tab_id" | fm_backend_herdr_windows_strip_cr)
+    label=$(printf '%s' "$label" | fm_backend_herdr_windows_strip_cr)
     [ -n "$tab_id" ] || continue
     pane_id=$(fm_backend_herdr_pane_for_tab "$session" "$wsid" "$tab_id") || continue
     [ -n "$pane_id" ] || continue

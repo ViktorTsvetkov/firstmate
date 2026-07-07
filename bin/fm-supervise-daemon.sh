@@ -292,6 +292,7 @@ _collapse_newlines() {  # <text>
 # Returns the resolved target on stdout; returns 1 if only the fallback is left
 # AND the fallback does not resolve to a live pane.
 discover_supervisor_target() {
+  local herdr_target
   if [ -n "${FM_SUPERVISOR_TARGET:-}" ]; then
     printf '%s' "$FM_SUPERVISOR_TARGET"
     return 0
@@ -301,7 +302,10 @@ discover_supervisor_target() {
     return 0
   fi
   if [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
-    printf '%s:%s' "${HERDR_SESSION:-default}" "$HERDR_PANE_ID"
+    fm_backend_source herdr >/dev/null 2>&1 || return 1
+    herdr_target="$(fm_backend_herdr_session):$HERDR_PANE_ID"
+    fm_backend_herdr_parse_target "$herdr_target" || return 1
+    printf '%s:%s' "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE"
     return 0
   fi
   printf '%s' "$FM_SUPERVISOR_TARGET_DEFAULT"
