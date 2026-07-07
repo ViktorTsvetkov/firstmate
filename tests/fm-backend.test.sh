@@ -132,7 +132,7 @@ build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry p
 # --- fm-backend.sh unit tests ------------------------------------------------
 
 test_backend_name_precedence() {
-  local dir cfg
+  local dir cfg posix_default windows_default windows_explicit windows_config windows_detect
   dir="$TMP_ROOT/name-precedence"; cfg="$dir/config"
   mkdir -p "$cfg"
 
@@ -147,14 +147,34 @@ test_backend_name_precedence() {
   [ "$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" FM_BACKEND='' FM_BACKEND_CONFIG_DIR="$cfg" fm_backend_name)" = tmux ] \
     || fail "fm_backend_name should default to tmux with no env/config/detection markers"
 
+  posix_default=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_BACKEND='' FM_BACKEND_CONFIG_DIR="$cfg" fm_backend_name)
+  [ "$posix_default" = tmux ] \
+    || fail "FM_PLATFORM_IS_WINDOWS=no must preserve the POSIX default tmux path byte-for-byte, got '$posix_default'"
+
+  windows_default=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_BACKEND='' FM_BACKEND_CONFIG_DIR="$cfg" fm_backend_name)
+  [ "$windows_default" = herdr ] \
+    || fail "FM_PLATFORM_IS_WINDOWS=yes should select herdr with no env/config/detection markers, got '$windows_default'"
+
+  windows_explicit=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_BACKEND=tmux FM_BACKEND_CONFIG_DIR="$cfg" fm_backend_name)
+  [ "$windows_explicit" = tmux ] \
+    || fail "FM_BACKEND=tmux should still win over the Windows default, got '$windows_explicit'"
+
   printf 'tmux\n' > "$cfg/backend"
   [ "$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID; FM_BACKEND='' FM_BACKEND_CONFIG_DIR="$cfg" fm_backend_name)" = tmux ] \
     || fail "fm_backend_name should read config/backend"
 
+  windows_config=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID; FM_PLATFORM_IS_WINDOWS=yes FM_BACKEND='' FM_BACKEND_CONFIG_DIR="$cfg" fm_backend_name)
+  [ "$windows_config" = tmux ] \
+    || fail "config/backend=tmux should still win over the Windows default, got '$windows_config'"
+
+  windows_detect=$(unset HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" FM_PLATFORM_IS_WINDOWS=yes TMUX='fake,1,0' FM_BACKEND='' FM_BACKEND_CONFIG_DIR="$TMP_ROOT/name-precedence-empty-config" fm_backend_name 2>/dev/null)
+  [ "$windows_detect" = tmux ] \
+    || fail "positive auto-detect should still win before the Windows default, got '$windows_detect'"
+
   [ "$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID; FM_BACKEND=tmux FM_BACKEND_CONFIG_DIR="$cfg" fm_backend_name)" = tmux ] \
     || fail "FM_BACKEND env should win over config/backend"
 
-  pass "fm_backend_name: FM_BACKEND env > config/backend > default tmux"
+  pass "fm_backend_name: FM_BACKEND env > config/backend > auto-detect > POSIX tmux default / Windows herdr default"
 }
 
 # fm_backend_detect: environment-marker runtime auto-detection (mirrors
