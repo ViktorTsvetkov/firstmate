@@ -80,7 +80,11 @@ holder_alive_windows_herdr() {  # <pid>
 }
 
 holder_alive() {  # true if $1 is a live process that looks like a harness
-  local pid=$1 comm
+  local pid=$1 comm rec_pid
+  if fm_platform_is_windows; then
+    rec_pid=$(herdr_lock_value pid || true)
+    [ "$rec_pid" = "$pid" ] && { holder_alive_windows_herdr "$pid"; return; }
+  fi
   kill -0 "$pid" 2>/dev/null || return 1
   comm=$(fm_platform_ps_field "$pid" comm) || { holder_alive_windows_herdr "$pid"; return; }
   printf '%s' "$(basename "$comm") $(fm_platform_ps_field "$pid" args 2>/dev/null)" | grep -qE "$HARNESS_RE" && return 0

@@ -42,14 +42,27 @@ SH
   chmod +x "$fakebin/ps"
 }
 
+make_fake_ps_generic_harness() {
+  local fakebin=$1
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"comm="*) printf '%s\n' '/usr/local/bin/claude'; exit 0 ;;
+  *"args="*) printf '%s\n' 'claude'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
 make_fake_herdr_agent() {
-  local fakebin=$1 log=$2
+  local fakebin=$1 log=$2 agent=${3:-claude}
   cat > "$fakebin/herdr" <<SH
 #!/usr/bin/env bash
 printf '%s\\n' "\$*" >> "$log"
 case "\$*" in
   "agent get w1:p2 --session fm-lock-test")
-    printf '{"id":"cli:agent:get","result":{"agent":{"name":"claude","pane_id":"w1:p2"},"type":"agent_info"}}\\n'
+    printf '{"id":"cli:agent:get","result":{"agent":{"name":"$agent","pane_id":"w1:p2"},"type":"agent_info"}}\\n'
     ;;
   *) exit 1 ;;
 esac
@@ -84,6 +97,37 @@ test_windows_herdr_fallback_uses_session_pgid_harness() {
   pass "fm-lock Windows herdr fallback records the live harness process-group leader"
 }
 
+test_windows_herdr_sidecar_overrides_generic_harness_liveness() {
+  local dir fakebin home live_pid log stale_status live_status
+  dir="$TMP_ROOT/windows-herdr-sidecar"
+  fakebin=$(fm_fakebin "$dir")
+  home="$dir/home"
+  log="$dir/herdr.log"
+  mkdir -p "$home/state"
+  sleep 60 &
+  live_pid=$!
+  trap 'kill "$live_pid" 2>/dev/null || true' EXIT
+  make_fake_ps_generic_harness "$fakebin"
+  printf '%s\n' "$live_pid" > "$home/state/.lock"
+  {
+    printf 'pid=%s\n' "$live_pid"
+    printf 'session=fm-lock-test\n'
+    printf 'pane=w1:p2\n'
+    printf 'agent=claude\n'
+  } > "$home/state/.lock.herdr"
+
+  make_fake_herdr_agent "$fakebin" "$log" codex
+  stale_status=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_PLATFORM_IS_WINDOWS=yes "$LOCK" status)
+  [ "$stale_status" = "lock: stale (pid $live_pid dead or not a harness)" ] || fail "stale herdr sidecar lock should not fall back to generic harness liveness: $stale_status"
+
+  make_fake_herdr_agent "$fakebin" "$log" claude
+  live_status=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_PLATFORM_IS_WINDOWS=yes "$LOCK" status)
+  [ "$live_status" = "lock: held by live harness pid $live_pid" ] || fail "matching herdr sidecar lock should remain live: $live_status"
+  kill "$live_pid" 2>/dev/null || true
+  trap - EXIT
+  pass "fm-lock Windows herdr sidecar verdict overrides generic harness liveness"
+}
+
 test_posix_uses_ancestry_without_herdr_fallback() {
   local dir fakebin home out log
   dir="$TMP_ROOT/posix-ancestry"
@@ -105,4 +149,5 @@ test_posix_uses_ancestry_without_herdr_fallback() {
 }
 
 test_windows_herdr_fallback_uses_session_pgid_harness
+test_windows_herdr_sidecar_overrides_generic_harness_liveness
 test_posix_uses_ancestry_without_herdr_fallback
