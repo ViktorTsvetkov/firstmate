@@ -138,6 +138,7 @@ fm_backend_herdr_version_check() {
   local status protocol version
   status=$(herdr status --json 2>/dev/null) || { echo "error: 'herdr status --json' failed; is herdr installed correctly?" >&2; return 1; }
   protocol=$(printf '%s' "$status" | jq -r '.client.protocol // empty' 2>/dev/null)
+  protocol=$(printf '%s' "$protocol" | fm_backend_herdr_windows_strip_cr)
   version=$(printf '%s' "$status" | jq -r '.client.version // empty' 2>/dev/null)
   case "$protocol" in
     ''|*[!0-9]*)
@@ -178,10 +179,12 @@ fm_backend_herdr_windows_strip_cr() {
 fm_backend_herdr_server_ensure() {  # <session>
   local session=$1 running out i
   running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
+  running=$(printf '%s' "$running" | fm_backend_herdr_windows_strip_cr)
   [ "$running" = "true" ] && return 0
   fm_backend_herdr_server_start "$session" || return 1
   for i in $(seq 1 20); do
     running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
+    running=$(printf '%s' "$running" | fm_backend_herdr_windows_strip_cr)
     [ "$running" = "true" ] && return 0
     sleep 0.5
   done
@@ -256,6 +259,7 @@ fm_backend_herdr_workspace_prune_seeded_default_tab() {  # <session> <workspace_
   [ -n "$tab_id" ] || return 0
   tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 0
   tab_count=$(printf '%s' "$tabs" | jq -r '.result.tabs? // [] | length' 2>/dev/null)
+  tab_count=$(printf '%s' "$tab_count" | fm_backend_herdr_windows_strip_cr)
   case "$tab_count" in ''|*[!0-9]*|0|1) return 0 ;; esac
   current_label=$(printf '%s' "$tabs" | jq -r --arg t "$tab_id" '.result.tabs[]? | select(.tab_id == $t) | .label' 2>/dev/null)
   current_label=$(printf '%s' "$current_label" | fm_backend_herdr_windows_strip_cr)
@@ -264,6 +268,7 @@ fm_backend_herdr_workspace_prune_seeded_default_tab() {  # <session> <workspace_
   [ -n "$pane_id" ] || return 0
   agent_out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null)
   agent_status=$(printf '%s' "$agent_out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
+  agent_status=$(printf '%s' "$agent_status" | fm_backend_herdr_windows_strip_cr)
   [ "$agent_status" = working ] && return 0
   fm_backend_herdr_cli "$session" pane close "$pane_id" >/dev/null 2>&1 || true
 }
@@ -774,6 +779,7 @@ fm_backend_herdr_busy_state() {  # <target>
   local out status
   out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" agent get "$FM_BACKEND_HERDR_PANE" 2>/dev/null) || { printf 'unknown'; return 0; }
   status=$(printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
+  status=$(printf '%s' "$status" | fm_backend_herdr_windows_strip_cr)
   case "$status" in
     working) printf 'busy' ;;
     idle|done) printf 'idle' ;;
