@@ -47,6 +47,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-tmux-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
 
 ID=${1:-}
 [ -n "$ID" ] || { echo "usage: fm-crew-state.sh <id>" >&2; exit 2; }
@@ -90,11 +92,10 @@ fi
 
 # --- status log ------------------------------------------------------------
 
-# Last non-empty status line, and its leading verb (the word before the colon).
-log_last_line() {
-  [ -f "$LOG" ] || return 1
-  grep -v '^[[:space:]]*$' "$LOG" 2>/dev/null | tail -1
-}
+# Last non-empty status line, normalized by the shared reader, and its leading
+# verb (the word before the colon).
+# Use the shared classifier reader so Windows-created UTF-8 BOM status logs are
+# normalized before anchored verb extraction.
 log_verb_of() {  # <line>
   local v=${1%%:*}
   v="${v#"${v%%[![:space:]]*}"}"
@@ -119,7 +120,7 @@ map_log_state() {  # <verb>
   esac
 }
 
-LOG_LINE=$(log_last_line || true)
+LOG_LINE=$(last_status_line "$LOG" || true)
 LOG_VERB=$(log_verb_of "$LOG_LINE")
 
 # pane_readable is consulted ONLY in the no-run fallback below. The run-step path
