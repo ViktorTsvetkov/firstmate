@@ -5,7 +5,7 @@ fm_git_common_dir_realpath() {  # <repo>
   local repo=$1 common
   common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
   [ -n "$common" ] || return 1
-  cd "$common" 2>/dev/null && pwd -P
+  ( cd "$common" 2>/dev/null && pwd -P )
 }
 
 fm_git_common_dir_matches() {  # <expected-repo> <candidate-repo>
