@@ -1,7 +1,7 @@
 Native Windows Herdr away-mode E2E evidence
 Date: 2026-07-08
 Host shell: Git Bash for Windows, MINGW64_NT-10.0-26100
-Worktree: C:/Users/viktor/.treehouse/firstmate-upstream-0bcca5/1/firstmate-upstream
+Worktree: <WINPORT-WORKTREE>/firstmate-upstream
 Branch: fm/herdr-afk-undefer-w5
 
 Versions:
