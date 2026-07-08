@@ -38,13 +38,59 @@ FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-crew-state.sh}"
 # needs a custom verb vocabulary; absent, this default applies.
 FM_CLASSIFY_CAPTAIN_RE_DEFAULT='done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged'
 
+status_file_utf16_encoding() {  # <file>
+  local bytes rest byte idx=0 even_nulls=0 odd_nulls=0
+  bytes=$(LC_ALL=C od -An -tx1 -N 512 "$1" 2>/dev/null | tr -d ' \n') || return 0
+  case "$bytes" in
+    fffe*) printf '%s' UTF-16LE; return 0 ;;
+    feff*) printf '%s' UTF-16BE; return 0 ;;
+  esac
+
+  rest=$bytes
+  while [ ${#rest} -ge 2 ]; do
+    byte=${rest:0:2}
+    rest=${rest:2}
+    if [ "$byte" = 00 ]; then
+      if [ $((idx % 2)) -eq 0 ]; then
+        even_nulls=$((even_nulls + 1))
+      else
+        odd_nulls=$((odd_nulls + 1))
+      fi
+    fi
+    idx=$((idx + 1))
+  done
+
+  if [ "$odd_nulls" -ge 2 ] && [ "$even_nulls" -eq 0 ]; then
+    printf '%s' UTF-16LE
+  elif [ "$even_nulls" -ge 2 ] && [ "$odd_nulls" -eq 0 ]; then
+    printf '%s' UTF-16BE
+  fi
+}
+
+decode_status_file_utf16() {  # <encoding> <file>
+  local enc=$1 f=$2
+  if command -v iconv >/dev/null 2>&1; then
+    iconv -f "$enc" -t UTF-8 "$f" 2>/dev/null && return 0
+  fi
+  if command -v perl >/dev/null 2>&1; then
+    perl -MEncode -0777 -e 'my ($enc, $file) = @ARGV; open my $fh, "<:raw", $file or exit 1; local $/; my $raw = <$fh>; my $text = Encode::decode($enc, $raw, Encode::FB_DEFAULT); $text =~ s/^\x{FEFF}//; print $text;' "$enc" "$f" 2>/dev/null && return 0
+  fi
+  return 1
+}
+
 # Return the last non-blank line of a status file (empty if missing/blank).
 # Strip only a genuine leading UTF-8 BOM, which native Windows PowerShell 5.1 can
-# write on the first line of a newly-created status log.
+# write on the first line of a newly-created status log. Decode UTF-16 only when
+# the file's bytes prove it by BOM or by a null-byte pattern at code-unit offsets.
 last_status_line() {
-  local f=$1 line
+  local f=$1 line enc
   [ -e "$f" ] || return 0
-  line=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1)
+  enc=$(status_file_utf16_encoding "$f")
+  if [ -n "$enc" ]; then
+    line=$(decode_status_file_utf16 "$enc" "$f" | grep -v '^[[:space:]]*$' | tail -1)
+  else
+    line=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1)
+  fi
   case "$line" in
     $'\xef\xbb\xbf'*) line=${line#$'\xef\xbb\xbf'} ;;
   esac
