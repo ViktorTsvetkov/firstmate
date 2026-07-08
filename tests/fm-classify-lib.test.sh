@@ -31,6 +31,28 @@ test_last_status_line_ignores_bom_on_non_last_line() {
   pass "last_status_line returns the later status when only the first line has a BOM"
 }
 
+test_last_status_line_decodes_utf16le_done() {
+  local d line
+  d="$TMP_ROOT/utf16le-done"
+  mkdir -p "$d"
+  printf '\377\376d\000o\000n\000e\000:\000 \000u\000t\000f\0001\0006\000l\000e\000\n\000' > "$d/task.status"
+  line=$(last_status_line "$d/task.status")
+  [ "$line" = "done: utf16le" ] || fail "UTF-16LE status was not decoded, got: $line"
+  status_is_captain_relevant "$line" || fail "UTF-16LE done: did not classify as captain-relevant"
+  pass "last_status_line decodes UTF-16LE status lines"
+}
+
+test_last_status_line_decodes_utf16be_done() {
+  local d line
+  d="$TMP_ROOT/utf16be-done"
+  mkdir -p "$d"
+  printf '\376\377\000d\000o\000n\000e\000:\000 \000u\000t\000f\0001\0006\000b\000e\000\n' > "$d/task.status"
+  line=$(last_status_line "$d/task.status")
+  [ "$line" = "done: utf16be" ] || fail "UTF-16BE status was not decoded, got: $line"
+  status_is_captain_relevant "$line" || fail "UTF-16BE done: did not classify as captain-relevant"
+  pass "last_status_line decodes UTF-16BE status lines"
+}
+
 test_forced_posix_no_bom_line_is_byte_identical() {
   local d line bytes
   d="$TMP_ROOT/posix-no-bom"
@@ -48,6 +70,8 @@ test_forced_posix_no_bom_line_is_byte_identical() {
 
 test_last_status_line_strips_leading_utf8_bom
 test_last_status_line_ignores_bom_on_non_last_line
+test_last_status_line_decodes_utf16le_done
+test_last_status_line_decodes_utf16be_done
 test_forced_posix_no_bom_line_is_byte_identical
 
 echo "all fm-classify-lib tests passed"

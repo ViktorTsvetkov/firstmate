@@ -94,8 +94,8 @@ fi
 
 # Last non-empty status line, normalized by the shared reader, and its leading
 # verb (the word before the colon).
-# Use the shared classifier reader so Windows-created UTF-8 BOM status logs are
-# normalized before anchored verb extraction.
+# Use the shared classifier reader so Windows-created UTF-8 BOM or proven
+# UTF-16 status logs are normalized before anchored verb extraction.
 log_verb_of() {  # <line>
   local v=${1%%:*}
   v="${v#"${v%%[![:space:]]*}"}"
