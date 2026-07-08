@@ -51,6 +51,8 @@ bin/fm-home-seed.sh <id> <home|-> <project>...
 The lease survives with no live process and is never recycled by later `treehouse get` or `prune`.
 The slot stays reserved across restarts until the lease is released.
 Release happens only on explicit retirement or seed rollback, never on routine restart or recovery.
+`bin/fm-home-seed.sh` accepts a treehouse-leased home only when it is a git worktree backed by the same git common directory as the active firstmate checkout.
+If the lease comes from another backing store, seeding refuses it and returns the lease.
 
 `bin/fm-home-seed.sh` copies the charter into the secondmate home as `data/charter.md`.
 `bin/fm-spawn.sh --secondmate` launches it through the secondmate harness path, resolving `config/secondmate-harness` -> `config/crew-harness` -> the primary's own harness unless an explicit per-spawn harness override is passed.
