@@ -870,7 +870,6 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
     sleep "$sleep_s"
     state=$(fm_backend_herdr_composer_state "$target")
     [ "$state" = empty ] && { printf 'empty'; return 0; }
-    [ "$submitted" -eq 1 ] && [ "$i" -eq 0 ] && [ "$state" = unknown ] && { printf 'empty'; return 0; }
     i=$((i + 1))
     [ "$i" -lt "$retries" ] || { printf '%s' "$state"; return 0; }
   done

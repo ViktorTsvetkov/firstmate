@@ -1614,6 +1614,25 @@ test_send_text_submit_unknown_on_capture_failure() {
   pass "fm_backend_herdr_send_text_submit: reports 'unknown' when post-Enter capture remains unreadable after retries"
 }
 
+test_windows_send_text_submit_unknown_after_pane_run_remains_unconfirmed() {
+  local dir log resp fb out enter_count
+  dir="$TMP_ROOT/windows-submit-read-fail"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # 1: pane run atomically types and submits
+  # 2: first capture fails
+  # 3: retry Enter
+  # 4: second capture still fails
+  printf '1\n' > "$resp/2.exit"
+  printf '1\n' > "$resp/4.exit"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 2 0.01 0.01' "$ROOT" )
+  [ "$out" = unknown ] || fail "Windows pane-run submit should remain unconfirmed when composer reads fail, got '$out'"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''run'$'\x1f''w1:p2'$'\x1f''hello captain' "Windows send_text_submit did not use pane run for the initial submit"
+  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
+  [ "$enter_count" -eq 1 ] || fail "Windows send_text_submit should retry once after an unknown first read, got $enter_count Enter(s)"
+  pass "fm_backend_herdr_send_text_submit: Windows pane-run success does not confirm an unreadable composer"
+}
+
 test_send_text_submit_retries_transient_unknown() {
   local dir log resp fb out enter_count
   dir="$TMP_ROOT/submit-transient-unknown"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -2034,6 +2053,7 @@ test_send_text_submit_detects_swallowed_enter
 test_send_text_submit_popup_autocomplete_requires_second_enter
 test_send_text_submit_send_failed
 test_send_text_submit_unknown_on_capture_failure
+test_windows_send_text_submit_unknown_after_pane_run_remains_unconfirmed
 test_send_text_submit_retries_transient_unknown
 test_dispatch_routes_herdr_backend
 test_dispatch_busy_state_unknown_for_tmux
