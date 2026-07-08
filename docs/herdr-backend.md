@@ -269,7 +269,8 @@ All implemented backends expose the identical caller-facing verdict vocabulary (
 
 ## Session targeting: the `--session` flag, not `HERDR_SESSION` alone
 
-`HERDR_SESSION=<name>` is the adapter's normal way to select a named herdr session for NON-destructive operations: start, workspace, tab, pane, capture, send, and busy-state calls all still use it (via `fm_backend_herdr_cli`, below).
+`HERDR_SESSION=<name>` is still set for the adapter's NON-destructive operations: start, workspace, tab, pane, capture, send, and busy-state calls.
+Most of those calls use `fm_backend_herdr_cli`; `pane send-keys` uses `fm_backend_herdr_cli_leading_session` because its positional key tail is variadic.
 
 Destructive session cleanup is different, and this distinction was learned the hard way.
 Verified empirically: on the installed herdr 0.7.1 client, neither an exported `HERDR_SESSION` nor an inline `HERDR_SESSION="$name"` prefix reliably targets a CLI subcommand once ANOTHER herdr server (e.g. the captain's live default session) is already bound on the machine - the client silently falls back to whatever server IS running instead of the requested one.
@@ -278,7 +279,7 @@ This is not a hypothetical: it killed the captain's live default herdr server, t
 
 The fix, verified against the real binary in an isolated session (both a genuinely separate isolated session and the default session's untouched state confirmed before and after):
 
-- The `--session <name>` GLOBAL FLAG reliably routes every herdr subcommand tried (`status`, `workspace *`, `tab *`, `pane *`, `agent *`, `server`, `session stop`/`delete`) to the named session, in either leading (`herdr --session <name> <subcommand>`) or trailing (`herdr <subcommand> ... --session <name>`) position - both verified to work identically.
+- The `--session <name>` GLOBAL FLAG reliably routes the non-variadic herdr subcommands tried (`status`, `workspace *`, `tab *`, `pane *`, `agent *`, `server`, `session stop`/`delete`) to the named session, in either leading (`herdr --session <name> <subcommand>`) or trailing (`herdr <subcommand> ... --session <name>`) position.
 - `bin/backends/herdr.sh`'s `fm_backend_herdr_cli` helper wraps most herdr invocations in the adapter: it sets `HERDR_SESSION` (kept for cosmetic/forward-compat reasons - harmless, and it is what the client's own JSON echoes back) AND appends a trailing `--session <name>`, so those adapter calls are correctly scoped regardless of what else is running on the machine.
 - `fm_backend_herdr_cli_leading_session` is the exception for `pane send-keys`, whose variadic key tail consumes a trailing `--session` as another key token; it still sets `HERDR_SESSION`, but places `--session <name>` before the subcommand.
 - For destructive test cleanup specifically, use `herdr session stop <name>` / `herdr session delete <name>` (the explicit-by-name forms - `<name>` is a REQUIRED positional argument, so herdr cannot resolve it ambiguously; herdr's own help text requires literally typing `default` to affect the default session), never the ambient `herdr server stop`. `tests/herdr-test-safety.sh`'s `herdr_safe_stop_and_delete` does this, plus a read-only hard guard (`herdr_refuse_if_default`, re-querying `herdr session list --json` immediately before EVERY stop/delete call, refusing on a literal `default` name, a not-found name, or `default:true`) as a second, independent layer - fails closed on any ambiguity.
@@ -441,12 +442,12 @@ Verified on native Windows Git Bash against real herdr 0.7.1-preview.2026-06-30-
 This reproduced the boot-blocker first: a command run inside a plain herdr pane had `HERDR_ENV=1`, `HERDR_PANE_ID=w1:p2`, Git Bash `PPID=1`, and `bin/fm-lock.sh` printed `error: cannot locate harness process in ancestry`.
 The fixed path was then verified by launching Claude through herdr, submitting a Bash-tool command that ran `fm-lock.sh`, and checking the scratch lock directory.
 
-The exact herdr launch shape was:
+The herdr launch shape, with the current required leading session selector for `send-keys`, is:
 
 ```bash
 herdr agent start claude --cwd "C:\Users\viktor\.treehouse\firstmate-upstream-0bcca5\3\firstmate-upstream" --workspace w1 --env FM_STATE_OVERRIDE=/tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703 --env FM_PLATFORM_IS_WINDOWS=yes --session fm-lock-liveclaude4-19703 -- claude --allowedTools Bash --allow-dangerously-skip-permissions
 herdr agent send claude "Use the Bash tool to run exactly: cd /c/Users/viktor/.treehouse/firstmate-upstream-0bcca5/3/firstmate-upstream && FM_STATE_OVERRIDE=/tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703 FM_PLATFORM_IS_WINDOWS=yes ./bin/fm-lock.sh; printf 'LOCKFILE='; cat /tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703/.lock 2>/dev/null || true; printf 'HERDRSIDE='; cat /tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703/.lock.herdr 2>/dev/null || true" --session fm-lock-liveclaude4-19703
-herdr pane send-keys w1:p2 enter --session fm-lock-liveclaude4-19703
+herdr --session fm-lock-liveclaude4-19703 pane send-keys w1:p2 enter
 ```
 
 The verification poll showed herdr still had the live Claude agent:
