@@ -451,7 +451,7 @@ lock=19775
 sidecar=pid=19775;session=fm-lock-liveclaude4-19703;pane=w1:p2;agent=claude;
 ```
 
-That proves a herdr-launched Claude tool command can acquire the firstmate session lock on native Windows after the ancestry walk fails, while preserving a live PID plus herdr session/pane/agent metadata for stale-lock checks.
+That proves a herdr-launched Claude tool command can acquire the firstmate session lock on native Windows after the ancestry walk fails, while preserving a live PID plus herdr session/pane/detected-agent metadata for stale-lock checks.
 
 ### Herdr lock identity field verification (2026-07-08)
 

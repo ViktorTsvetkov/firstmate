@@ -82,8 +82,9 @@ Personal preferences for one captain's fleet live locally in `data/captain.md`; 
 The primary lock file is local, gitignored `state/.lock` and contains the PID firstmate will use to decide whether another live harness already owns that home.
 On POSIX and normal process trees, `fm-lock.sh` finds that PID by walking from the current shell to the owning harness command.
 On native Windows under Herdr, Git Bash tool commands can report `PPID=1`, so the ancestry walk may not reach the harness.
-In that shape, when `HERDR_ENV=1`, `HERDR_PANE_ID` is present, and `herdr agent get` confirms the pane is still attached to a verified harness, `fm-lock.sh` records the live MSYS process-group leader instead.
-It also writes `state/.lock.herdr` with `pid=`, `session=`, `pane=`, and `agent=` so future `status` and stale-lock checks verify the same Herdr session, pane, and harness before treating the PID as live.
+In that shape, when `HERDR_ENV=1`, `HERDR_PANE_ID` is present, and `herdr agent get` confirms the pane's detected agent type is a verified harness, `fm-lock.sh` records the live MSYS process-group leader instead.
+It also writes `state/.lock.herdr` with `pid=`, `session=`, `pane=`, and `agent=` so future `status` and stale-lock checks verify the same Herdr session, pane, and detected agent type before treating the PID as live.
+The `agent=` value comes from `herdr agent get`'s `.result.agent.agent` field, falling back to `.result.agent.name` only for older Herdr responses that lack the detected field.
 That sidecar is authoritative for native-Windows Herdr locks; if the live Herdr agent no longer matches it, generic process-name liveness is not allowed to keep the lock.
 
 ## Operational learnings (data/learnings.md)

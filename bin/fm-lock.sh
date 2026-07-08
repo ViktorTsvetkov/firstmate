@@ -3,7 +3,8 @@
 # Writes the harness (agent) process PID found by walking the shell's ancestry.
 # On native Windows under herdr, where Git Bash tool commands may lose that
 # ancestry, falls back to the herdr pane's live process-group leader and records
-# state/.lock.herdr metadata for later stale-lock verification.
+# state/.lock.herdr metadata, including herdr's detected agent type, for later
+# stale-lock verification.
 # Usage: fm-lock.sh           acquire; exit 1 if another live session holds it
 #        fm-lock.sh status    print holder and liveness; always exits 0
 set -u
