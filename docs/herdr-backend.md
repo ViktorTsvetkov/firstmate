@@ -198,7 +198,7 @@ Herdr tasks additionally record:
 | Default-tab prune (create_task, first task in a fresh workspace only) | `herdr workspace create`'s own response (`.result.tab.tab_id`) identifies the seeded tab; `herdr tab list` + `herdr agent get <pane>` re-verify it; `herdr pane close <pane>` closes exactly that tab id | `herdr workspace create` seeds the new workspace with one auto-created default tab (label `1`, id captured straight from the create response) firstmate never uses. `fm_backend_herdr_create_task` closes EXACTLY that captured tab id right after creating the first real task tab in a freshly created workspace - never right after `workspace create` itself (see Kill row), and never re-derived from a tab's label or the workspace's tab count at create_task time (see "Default-tab prune" above for the created-vs-adopted safety gate and the 2026-07-02 incident it fixes). Best-effort; an ADOPTED workspace (not freshly created by this same call) is never a prune candidate at all. |
 | Recovery / list-live | `herdr tab list --workspace <id>`, filter labels starting with `fm-` | Label-based, never trusts a stored id blindly - see "ID stability" below. `<id>` is always THIS home's own workspace (`fm_backend_herdr_workspace_find`), so recovery never sees a sibling home's tabs. |
 | Workspace create / tab create (focus) | `herdr workspace create --no-focus`, `herdr tab create --no-focus` | Verified: neither focuses by default once a workspace already exists in the session, matching pre-P3 (flagless) behavior; `--no-focus` is passed anyway for defense in depth, since the very first workspace ever created in a brand-new session focuses regardless of the flag. `--focus` was separately verified to reliably focus, confirming the flag has real effect. |
-| Session targeting for DESTRUCTIVE calls | `herdr session stop <name> --session <name> --json`, then `herdr session delete <name> --session <name> --json`; never `herdr server stop` | Used only through `tests/herdr-test-safety.sh`, which re-queries `herdr session list --json` before every destructive call. See "Session targeting" below - `HERDR_SESSION` alone is not reliably honored once another herdr server is already running on the machine. |
+| Session targeting for DESTRUCTIVE calls | `herdr session stop <name> --session <name> --json`, then `herdr session delete <name> --session <name> --json`; never `herdr server stop` | Used by native-Windows adapter teardown only after the scoped workspace count reaches zero, and by `tests/herdr-test-safety.sh`, which re-queries `herdr session list --json` before every destructive test cleanup call. See "Session targeting" below - `HERDR_SESSION` alone is not reliably honored once another herdr server is already running on the machine. |
 
 ## Verified bug: `pane read --lines N` returns empty for small N
 
@@ -280,6 +280,8 @@ The fix, verified against the real binary in an isolated session (both a genuine
 - The `--session <name>` GLOBAL FLAG reliably routes every herdr subcommand tried (`status`, `workspace *`, `tab *`, `pane *`, `agent *`, `server`, `session stop`/`delete`) to the named session, in either leading (`herdr --session <name> <subcommand>`) or trailing (`herdr <subcommand> ... --session <name>`) position - both verified to work identically.
 - `bin/backends/herdr.sh`'s `fm_backend_herdr_cli` helper wraps every herdr invocation in the adapter: it sets `HERDR_SESSION` (kept for cosmetic/forward-compat reasons - harmless, and it is what the client's own JSON echoes back) AND appends a trailing `--session <name>`, so every adapter call is correctly scoped regardless of what else is running on the machine.
 - For destructive test cleanup specifically, use `herdr session stop <name>` / `herdr session delete <name>` (the explicit-by-name forms - `<name>` is a REQUIRED positional argument, so herdr cannot resolve it ambiguously; herdr's own help text requires literally typing `default` to affect the default session), never the ambient `herdr server stop`. `tests/herdr-test-safety.sh`'s `herdr_safe_stop_and_delete` does this, plus a read-only hard guard (`herdr_refuse_if_default`, re-querying `herdr session list --json` immediately before EVERY stop/delete call, refusing on a literal `default` name, a not-found name, or `default:true`) as a second, independent layer - fails closed on any ambiguity.
+- For native-Windows production teardown specifically, `fm_backend_herdr_release_session_if_empty` may use the same explicit stop/delete calls only after `fm_backend_herdr_workspace_count` proves the named session has zero workspaces.
+  That guarded path then reaps only a matching `herdr.exe server --session <same-name>` process if herdr leaves one behind.
 
 ## ID stability across a server restart
 
@@ -394,10 +396,13 @@ On Windows, `fm_backend_herdr_current_path` therefore submits a marked `pwd` pro
 POSIX keeps the passive `foreground_cwd` read and normalizes that value with `cygpath -u` only when the Windows branch is active.
 - **A trailing carriage return is stripped from every value read back from herdr.** `fm_backend_herdr_windows_strip_cr` runs `tr -d '\r'` on Windows and passes through (`cat`) on POSIX. Because Windows-native herdr emits CRLF, a trailing `\r` would otherwise taint every jq-extracted value the adapter compares or returns - protocol/version gate, server-running poll, default-tab prune label/agent-status checks, pane-agent-state round-trips and error-code compares, `parse_target`'s session/pane split, bounded `capture` and composer-state reads, busy-state, `pane_for_tab`, and `list_live`'s tab id/label - breaking exact-string compares such as `[ "$status" = working ]` and polluting captured pane text, returned targets, and paths. The strip is applied to each such value before it is compared or emitted.
 - **The headless server is launched detached via `nohup`.** `fm_backend_herdr_server_start` starts the server through `nohup bash -c '... herdr server ...' & disown` on Windows, where the POSIX `( ... & )` backgrounded-subshell form does not reliably survive; POSIX keeps the exact pre-existing subshell launch.
+- **An empty native-Windows session is released after the last task pane closes.** Verified on 2026-07-08 against herdr `0.7.1-preview.2026-06-30-3459798b606d`: `pane close` removed the task tab but left `herdr.exe server --session <name>` alive, and `session stop/delete` could report the isolated session stopped while that process still remained.
+  `fm_backend_herdr_kill` now checks the scoped workspace count after closing the pane; when it is zero on Windows, it stops and deletes that exact named session, then reaps only a stubborn `herdr.exe server --session <same-name>` process.
+  POSIX does none of this extra release work, and Windows never releases a session that still has workspaces.
 - **The composer's leading prompt glyph is stripped as a literal fixed string.** `fm_backend_herdr_composer_state`'s prompt-glyph strip uses `${stripped#'❯ '}`-style exact-prefix removals on Windows, because msys2/Git-Bash bash's byte-oriented `${x#??}`/`${x#?}` parameter expansions mangle the 3-byte prompt glyph U+276F (`❯`) and would misclassify the empty-composer ghost placeholder as pending. POSIX keeps the original byte-count `${x#??}`/`${x#?}` expansions; the ASCII prompts (`>`, `$`, `%`, `#`) are handled on both paths.
 
 On POSIX every conversion is a no-op: no `cygpath` is invoked (the cwd and the resolved shell path are passed through untouched), the CR strip is an identity passthrough, the composer prompt-glyph strip is the original byte-count parameter expansion, and the server launch is the original backgrounded subshell.
-This Windows handling is covered by fake-CLI unit tests (`tests/fm-backend-herdr.test.sh`'s `test_windows_*`/`test_posix_*` pairs, which assert the Windows branch calls `cygpath`/`nohup` and strips CR from each value it compares or returns, and that the POSIX branch never does and stays byte-identical - including that a POSIX empty `foreground_cwd` emits no bytes) and by `tests/fm-backend-herdr-handoff.test.sh`.
+This Windows handling is covered by fake-CLI unit tests (`tests/fm-backend-herdr.test.sh`'s `test_windows_*`/`test_posix_*` pairs, which assert the Windows branch calls `cygpath`/`nohup` and strips CR from each value it compares or returns, and that the POSIX branch never does and stays byte-identical - including that a POSIX empty `foreground_cwd` emits no bytes), by `tests/fm-backend-herdr-handoff.test.sh`, and by `tests/fm-backend-herdr-release.test.sh` for the empty-session release path.
 
 ### Native Windows handoff verification (2026-07-07)
 
@@ -447,6 +452,21 @@ sidecar=pid=19775;session=fm-lock-liveclaude4-19703;pane=w1:p2;agent=claude;
 ```
 
 That proves a herdr-launched Claude tool command can acquire the firstmate session lock on native Windows after the ancestry walk fails, while preserving a live PID plus herdr session/pane/agent metadata for stale-lock checks.
+
+### Native Windows afk and process-release verification (2026-07-08)
+
+Verified on native Windows Git Bash against real herdr `0.7.1-preview.2026-06-30-3459798b606d` with an isolated `HERDR_SESSION=fm-afk-liveverify-<pid>`.
+The live script created a real herdr supervisor pane, started `bin/fm-supervise-daemon.sh` with `FM_SUPERVISOR_BACKEND=herdr`, set `.afk`, wrote a delayed `needs-decision:` status event, waited for the daemon to inject the escalation digest, simulated the captain's unmarked return through `should_exit_afk`, cleared `.afk`, stopped the daemon, closed the panes, and ran guarded session cleanup.
+The exact observed output was:
+
+```text
+before_count=0
+escalation_delivered=injection
+return_cleared_afk=yes
+after_count=0
+```
+
+That proves the native-Windows herdr away-mode path delivered an escalation, recognized an unmarked return and cleared away mode, and returned `herdr.exe` process count to the original baseline after teardown.
 
 ## Known gaps and follow-up notes
 

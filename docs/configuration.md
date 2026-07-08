@@ -43,6 +43,7 @@ Spawn, list-live, and recovery paths read that label from the active home, so a 
 For normal herdr operations, `HERDR_SESSION` selects the named session, but destructive test cleanup must not rely on `HERDR_SESSION` alone.
 Use the explicit guarded cleanup path described in [`docs/herdr-backend.md`](herdr-backend.md) instead of `herdr server stop`.
 On native Windows under Git Bash the herdr adapter additionally converts paths between POSIX and Windows form (`cygpath` on the `--cwd`, the space-safe seeded task-pane `SHELL` env value it passes to herdr, and the active `pwd` probe it reads back) and launches the headless server detached; these conversions are gated on the Windows platform and leave POSIX behavior byte-identical (see [`docs/herdr-backend.md`](herdr-backend.md) "Native Windows path handling").
+On native Windows, herdr teardown also releases an empty named session after the last task pane closes, using the exact-session process cleanup documented in the same guide.
 For normal zellij operations, `FM_ZELLIJ_SESSION` selects the named session and defaults to `firstmate`.
 Zellij has no per-home workspace split: primary and secondmate tasks share that one session, callers keep using `fm-<id>`, and visible tab titles are scoped by the active `FM_HOME` readable label plus a short hash of the resolved `FM_ROOT` path as `fm-<home-label>-<id>`.
 Use the guarded cleanup path described in [`docs/zellij-backend.md`](zellij-backend.md) instead of `kill-all-sessions` or `delete-all-sessions`.
