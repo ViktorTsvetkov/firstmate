@@ -501,6 +501,31 @@ after_count=0
 
 That proves the native-Windows herdr away-mode path delivered an escalation, recognized an unmarked return and cleared away mode, and returned `herdr.exe` process count to the original baseline after teardown.
 
+## Known herdr 0.7.1-preview limitations (native Windows)
+
+The following limitations are known behavior of the external herdr `0.7.1-preview` tool on native Windows, not firstmate bugs.
+They were observed during live herdr acceptance testing and should be treated as operator-facing recovery guidance until a newer herdr build proves otherwise.
+
+### Server can die under fleet load
+
+During real fleet activity on native Windows, observed during an `/afk` away-mode teardown, the herdr server for a session can die entirely under load.
+The recognizable state is that `status.server.running` becomes unreachable, `agent list` errors, every pane and workspace from that session is lost, and zero `herdr.exe` processes remain.
+Firstmate's own empty-session release path is already guarded against taking down the session firstmate is itself running in: see "Session targeting: the `--session` flag, not `HERDR_SESSION` alone" for the `fm_backend_herdr_release_session_if_empty` / `fm_backend_herdr_windows_kill_server_processes` self-session guard.
+The remaining risk documented here is herdr `0.7.1-preview` instability under native-Windows fleet load, independent of that closed firstmate path.
+
+Recovery: start a fully fresh herdr session with a new `--session` name and relaunch there.
+Do not try to recover by restarting the dead session's server; a restarted server for the same session can preserve listings while reads remain broken, as described below.
+
+### Restarted servers can list panes but cannot serve reads
+
+After a herdr server death, restarting the herdr `0.7.1-preview` server for the same session can leave herdr in an inconsistent state.
+The agent can re-register, and both `agent list` and `pane list` can show the agent and pane, but `pane read <pane>` and `agent read <agent>` return `pane_not_found` or `agent_not_found`.
+This list/read disagreement was reproducible across multiple restarts and blocks observing or steering any firstmate process recovered onto the restarted server.
+Treat it as a herdr `0.7.1-preview` internal inconsistency, not a firstmate bug.
+
+Recovery: do not restart the herdr server for the same session as the recovery path.
+Start a fully fresh herdr session with a new `--session` name and relaunch there.
+
 ## Known gaps and follow-up notes
 
 - **No `events.subscribe` native push.** The busy-state semantic read (`agent.get`) is consumed through the EXISTING `fm-watch.sh` poll loop (same 15-second cadence as every other window), not a persistent async subscriber pushing events directly into the wake queue.
