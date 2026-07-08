@@ -110,7 +110,7 @@ BASE_REF=$(resolve_base_ref) \
 # tmux-only conformance run the tmux adapter's behavior is what is under test,
 # and that is unchanged by any later (e.g. non-tmux backend) addition to
 # fm-backend.sh's own dispatch surface.
-OLD_BIN_UNCHANGED_SIBLINGS="fm-guard.sh fm-tangle-lib.sh fm-tmux-lib.sh fm-marker-lib.sh fm-wake-lib.sh fm-platform-lib.sh fm-classify-lib.sh fm-ff-lib.sh fm-config-inherit-lib.sh fm-tasks-axi-lib.sh fm-project-mode.sh fm-harness.sh fm-crew-state.sh fm-backend.sh"
+  OLD_BIN_UNCHANGED_SIBLINGS="fm-guard.sh fm-tangle-lib.sh fm-git-identity-lib.sh fm-tmux-lib.sh fm-marker-lib.sh fm-wake-lib.sh fm-platform-lib.sh fm-classify-lib.sh fm-ff-lib.sh fm-config-inherit-lib.sh fm-tasks-axi-lib.sh fm-project-mode.sh fm-harness.sh fm-crew-state.sh fm-backend.sh"
 OLD_BIN_REFACTORED="fm-send.sh fm-peek.sh fm-watch.sh fm-spawn.sh fm-teardown.sh"
 
 build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry point)
@@ -644,12 +644,19 @@ run_send_case() {  # <bin-root> <fakebin> <log> <home> -- <send args...>
     "$bin/bin/fm-send.sh" "$@" >/dev/null 2>&1
 }
 
+strip_send_preflight() {  # <log>
+  local preflight
+  preflight=$'tmux\x1fdisplay-message\x1f-p\x1f-t\x1fsess:win\x1f#{pane_id}'
+  awk -v preflight="$preflight" '$0 != preflight { print }' "$1"
+}
+
 test_send_conformance_old_vs_new() {
-  local old_bin fb log_old log_new home rc_old rc_new
+  local old_bin fb log_old log_new home rc_old rc_new filtered_old filtered_new
   old_bin=$(build_old_bin send-old)
   fb=$(make_send_fakebin "$TMP_ROOT/send-fake")
   home="$TMP_ROOT/send-home"; mkdir -p "$home/state"
   log_old="$TMP_ROOT/send-old.log"; log_new="$TMP_ROOT/send-new.log"
+  filtered_old="$TMP_ROOT/send-old.filtered.log"; filtered_new="$TMP_ROOT/send-new.filtered.log"
 
   # Case 1: --key path.
   run_send_case "$old_bin" "$fb" "$log_old" "$home" -- "sess:win" --key Escape
@@ -657,7 +664,11 @@ test_send_conformance_old_vs_new() {
   run_send_case "$ROOT" "$fb" "$log_new" "$home" -- "sess:win" --key Escape
   rc_new=$?
   expect_code "$rc_old" "$rc_new" "fm-send --key: old vs new exit code"
-  diff -u "$log_old" "$log_new" > "$TMP_ROOT/send-diff-key.txt" 2>&1 \
+  assert_contains "$(cat "$log_new")" $'\x1f''display-message'$'\x1f''-p'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''#{pane_id}' \
+    "fm-send --key did not verify the explicit tmux target before sending"
+  strip_send_preflight "$log_old" > "$filtered_old"
+  strip_send_preflight "$log_new" > "$filtered_new"
+  diff -u "$filtered_old" "$filtered_new" > "$TMP_ROOT/send-diff-key.txt" 2>&1 \
     || fail "fm-send --key: tmux command log differs old vs new"$'\n'"$(cat "$TMP_ROOT/send-diff-key.txt")"
   assert_contains "$(cat "$log_new")" $'\x1f''Escape' "fm-send --key did not send the named key"
 
@@ -667,7 +678,9 @@ test_send_conformance_old_vs_new() {
   run_send_case "$ROOT" "$fb" "$log_new" "$home" -- "sess:win" hello captain
   rc_new=$?
   expect_code "$rc_old" "$rc_new" "fm-send plain text: old vs new exit code"
-  diff -u "$log_old" "$log_new" > "$TMP_ROOT/send-diff-plain.txt" 2>&1 \
+  strip_send_preflight "$log_old" > "$filtered_old"
+  strip_send_preflight "$log_new" > "$filtered_new"
+  diff -u "$filtered_old" "$filtered_new" > "$TMP_ROOT/send-diff-plain.txt" 2>&1 \
     || fail "fm-send plain text: tmux command log differs old vs new"$'\n'"$(cat "$TMP_ROOT/send-diff-plain.txt")"
   assert_contains "$(cat "$log_new")" $'\x1f''send-keys'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''-l'$'\x1f''hello captain' \
     "fm-send did not send the literal text with send-keys -l"
@@ -681,7 +694,9 @@ test_send_conformance_old_vs_new() {
   run_send_case "$ROOT" "$fb" "$log_new" "$home" -- "sess:win" /some-skill
   rc_new=$?
   expect_code "$rc_old" "$rc_new" "fm-send /skill: old vs new exit code"
-  diff -u "$log_old" "$log_new" > "$TMP_ROOT/send-diff-slash.txt" 2>&1 \
+  strip_send_preflight "$log_old" > "$filtered_old"
+  strip_send_preflight "$log_new" > "$filtered_new"
+  diff -u "$filtered_old" "$filtered_new" > "$TMP_ROOT/send-diff-slash.txt" 2>&1 \
     || fail "fm-send /skill: tmux command log differs old vs new"$'\n'"$(cat "$TMP_ROOT/send-diff-slash.txt")"
 
   pass "fm-send.sh: --key, plain text, and /skill tmux command logs are byte-identical old vs new (send-keys -l, Enter submission preserved)"
