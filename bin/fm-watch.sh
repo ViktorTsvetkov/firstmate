@@ -183,6 +183,8 @@ window_is_busy() {  # <window> <tail40>
 }
 
 refresh_windows_herdr_beacon() {  # <backend>
+  # Native Windows herdr pane reads can be slow enough across several tasks to
+  # make the poll-boundary beacon look stale before the cycle completes.
   [ "$1" = herdr ] || return 0
   fm_platform_is_windows || return 0
   touch "$STATE/.last-watcher-beat"
