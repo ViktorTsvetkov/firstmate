@@ -23,15 +23,16 @@ batched digest rather than per-wake injections.
    This file survives a firstmate restart: recovery re-enters afk if the
    flag is present.
 
-2. **Ensure the sub-supervisor daemon is running.** Check the pid file; start
-   the daemon only if it is dead or absent:
+2. **Ensure the sub-supervisor daemon is running.** Start the helper as its own
+   tracked background terminal/session:
    ```sh
-   if [ -f state/.supervise-daemon.pid ] && kill -0 "$(cat state/.supervise-daemon.pid)" 2>/dev/null; then
-     : # daemon already alive - it picks up the flag on its next cycle
-   else
-     nohup bin/fm-supervise-daemon.sh >/dev/null 2>&1 &
-   fi
+   bin/fm-afk-start.sh
    ```
+   The helper sets or refreshes `state/.afk`, exits immediately if the identity-backed daemon lock already names a live process, and otherwise execs `bin/fm-supervise-daemon.sh` in the foreground.
+   Do not wrap this in `nohup ... &`.
+   Codex/herdr can reap fire-and-forget shell children after a tool call
+   returns; a tracked background terminal/session keeps the daemon attached to
+   the harness lifecycle and survived the real incident reproduction.
    The daemon is **presence-gated**: it injects escalations only while
    `state/.afk` exists, and stays quiet otherwise.
 
@@ -90,8 +91,8 @@ backend (tmux or herdr; see "Auto-discovered supervisor pane" below):
   correctly read as empty, not pending. Without this, every idle claude pane
   looked like pending input and the daemon deferred 100% of escalations
   (incident afk-invx-i5). `FM_COMPOSER_IDLE_RE` still overrides empty-composer
-  matching after border stripping. On herdr, the equivalent structural
-  border-row classifier (`fm_backend_herdr_composer_state`,
+  matching after border stripping. On herdr, the equivalent ANSI-aware
+  structural classifier (`fm_backend_herdr_composer_state`,
   docs/herdr-backend.md) plays the same role.
 
 Either condition defers the injection; the buffered escalation survives in
@@ -109,14 +110,17 @@ an ERROR in the daemon log, a durable
 catch-up if present), and a flash on the supervisor client's status line.
 So a guard false-positive becomes a visible stall, never an unbounded silent no-op.
 
-## Submit Model
+## Submit model
 
-The digest is typed **once** (`send-keys -l` on tmux and `pane send-text` on POSIX herdr - both literal, non-submitting sends), then submitted with Enter and **verified**: Enter is retried (Enter only, never a retype) until the composer clears.
-On native-Windows herdr, the initial submit uses Herdr's atomic `pane run` primitive because live Windows showed a separate `send-keys Enter` can be swallowed while the CLI reports success; subsequent verification retries still send Enter only.
-A submit "landed" only when the composer is confirmed empty afterward, using
-the same corrected, border-aware detector as the composer guard.
-A bordered-empty claude composer is recognized as submitted rather than
-mistaken for a swallowed Enter.
+The digest is typed **once** (`send-keys -l` on tmux, `pane send-text` on
+herdr - both literal, non-submitting sends), then submitted with Enter and
+**verified** through the selected backend's submit primitive.
+Enter is retried (Enter only, never a retype) until the backend confirms the
+submit landed.
+For tmux that confirmation is a cleared composer, using the same corrected,
+border-aware detector as the composer guard.
+For herdr, normal idle-baseline submits are confirmed by native agent-state showing a real turn started; the ANSI-aware composer classifier remains the pre-injection guard and conservative fallback for non-idle or unreadable baselines.
+A bordered-empty or ghost-only composer is recognized as empty where that backend uses composer confirmation, rather than mistaken for a swallowed Enter.
 `fm-send.sh` uses the same primitive and exits non-zero
 when a steer's Enter is positively swallowed, so firstmate learns an instruction
 did not land instead of leaving it unsubmitted.
@@ -141,18 +145,20 @@ Classify each wake this way:
   (`done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged`)
   -> self-handle. Captain-relevant verb -> escalate.
 - `check` -> always escalate. Check scripts print only when firstmate should wake.
-- `stale` with a terminal status -> escalate.
-  Non-terminal stale is transient: record a marker and self-handle.
-  If the pane is still idle past `FM_STALE_ESCALATE_SECS` (default 240s), housekeeping escalates it as a possible wedge once for that window plus last-status combination while the buffered digest remains undelivered.
-  This bounds wedge-detection latency to the threshold plus a tick: a delay, never a loss.
-  Healthy crewmates are autonomous and do not wait on firstmate mid-task.
+- `stale` with a terminal status -> escalate. Non-terminal stale is transient:
+  record a marker and self-handle. If the pane is still idle past
+  `FM_STALE_ESCALATE_SECS` (default 240s), housekeeping escalates it as a
+  possible wedge. This bounds wedge-detection latency to the threshold plus a
+  tick: a delay, never a loss. Healthy crewmates are autonomous and do not wait
+  on firstmate mid-task.
 - `heartbeat` -> self-handle. The daemon runs its own cheap bash fleet scan
   every `FM_HEARTBEAT_SCAN_SECS` (default 300s) as the catch-all for a
   captain-relevant status line the per-wake classifier might miss.
 - Unknown reason, or any uncertainty -> escalate fail-safe.
 
-Escalations are buffered up to `FM_ESCALATE_BATCH_SECS` (default 90s; 0 = immediate) and flushed as one single-line digest prefixed with the sentinel marker, carrying pre-read status summaries and a recommended action.
-When immediate mode is selected (`FM_ESCALATE_BATCH_SECS=0`), catch-all scan findings flush in the same housekeeping pass instead of waiting for the next tick.
+Escalations are buffered up to `FM_ESCALATE_BATCH_SECS` (default 90s; 0 =
+immediate) and flushed as one single-line digest prefixed with the sentinel
+marker, carrying pre-read status summaries and a recommended action.
 The single-line format makes the submission unambiguous across harnesses, and
 the marker lets firstmate distinguish it from a real captain message.
 
@@ -181,15 +187,21 @@ the marker lets firstmate distinguish it from a real captain message.
   durable `state/.subsuper-inject-wedged` marker, and a status-line flash. A
   composer false-positive surfaces as a visible stall, never an unbounded silent
   no-op.
-- **Verified type-once submit model** - the digest is typed once (`send-keys -l` on tmux, `pane send-text` on POSIX herdr, or one native-Windows herdr `pane run` initial submit), then verified.
-  Enter is retried, Enter only and never a retype, until the composer is confirmed empty.
-  That empty composer is the acknowledgement that the submit landed, using the same dim-ghost-aware and border-aware detector (tmux) or structural border-row classifier (herdr) so a ghost-only or bordered-empty claude composer counts as submitted rather than a false swallowed Enter.
+- **Verified type-once submit model** - the digest is typed once (`send-keys -l`
+  on tmux, `pane send-text` on herdr), then submitted with Enter and verified.
+  Enter is retried, Enter only and never a retype, until the backend submit
+  primitive reports `empty` as its caller-facing success verdict.
+  For tmux that verdict means the dim-ghost-aware and border-aware composer
+  cleared.
+  For herdr's normal idle-baseline path it means native agent-state observed a real turn start; herdr uses the ANSI-aware structural classifier for the pre-injection composer guard and fallback paths.
+  This lets ghost-only or bordered-empty composers count as empty where a composer read is the active confirmation signal.
 - **Marker strip** - `strip_injection_marker` removes the sentinel prefix before
   classification or relay, so the digest text firstmate sees is clean.
 - **Portable singleton lock** - the daemon uses the repo's portable lock helper
   (`fm-wake-lib.sh`) instead of `flock`, which is absent on macOS.
-- **Dedupe across signal/stale/scan** - `classify_signal` and `classify_stale` both check the seen-status marker before escalating, so a status escalated by one path is not re-escalated by another in the same digest.
-  Persistent stale housekeeping also records the window plus last-status line it already buffered and suppresses repeats until the task's status changes or a fresh stale wake records a new marker.
+- **Dedupe across signal/stale/scan** - `classify_signal` and `classify_stale`
+  both check the seen-status marker before escalating, so a status escalated by
+  one path is not re-escalated by another in the same digest.
 - **Auto-discovered supervisor pane** - the daemon resolves its own BACKEND
   (tmux vs herdr) and TARGET independently, mirroring
   `bin/fm-backend.sh`'s own runtime auto-detection. Backend: `FM_SUPERVISOR_BACKEND`
