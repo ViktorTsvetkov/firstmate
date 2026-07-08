@@ -472,10 +472,10 @@ acquire_treehouse_home() {
     return 1
   }
   [ -n "$home" ] || { echo "error: treehouse get --lease did not report a firstmate home" >&2; return 1; }
+  refuse_active_home_path "$home" || return 1
   fm_git_common_dir_matches "$FM_ROOT" "$home" || {
     echo "error: treehouse get --lease yielded a firstmate home backed by a different git store: $home" >&2
-    ( cd "$FM_ROOT" && treehouse return --force "$home" >/dev/null ) \
-      || echo "warning: failed to return mismatched treehouse-acquired home $home; lease may still be held" >&2
+    seed_return_treehouse_home "$home"
     return 1
   }
   printf '%s\n' "$home"
@@ -643,6 +643,10 @@ seed_rollback_target() {
 seed_return_treehouse_home() {
   local home=$1 abs_home
   abs_home=$(seed_rollback_target "$home" "treehouse-acquired home") || return 0
+  git -C "$abs_home" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "REFUSED: unsafe treehouse-acquired home rollback target $home is not a git worktree" >&2
+    return 0
+  }
   if ! command -v treehouse >/dev/null 2>&1; then
     echo "warning: failed to return treehouse-acquired home $abs_home during seed rollback; treehouse command not found" >&2
     return 0

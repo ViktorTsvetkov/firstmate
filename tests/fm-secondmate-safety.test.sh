@@ -334,6 +334,33 @@ test_home_seed_does_not_return_unsafe_acquired_home() {
   pass "home seeding leaves unsafe acquired active homes untouched"
 }
 
+test_home_seed_does_not_return_non_worktree_acquired_home() {
+  local home acquired fakebin log err lease
+  home="$TMP_ROOT/dash-non-worktree-home"
+  acquired="$TMP_ROOT/dash-non-worktree-acquired-home"
+  err="$TMP_ROOT/dash-non-worktree.err"
+  mkdir -p "$home/projects" "$home/data" "$home/state" "$acquired"
+  fm_git_init_commit "$home/projects/alpha"
+  fm_git_add_origin "$home/projects/alpha" "$TMP_ROOT/remotes/dash-non-worktree-alpha.git"
+  printf '%s\n' '- alpha [direct-PR] - alpha project (added 2026-06-22)' > "$home/data/projects.md"
+  fakebin=$(make_fake_tmux "$TMP_ROOT/dash-non-worktree-fake")
+  log="$TMP_ROOT/dash-non-worktree-fake/tmux.log"
+  lease="$TMP_ROOT/dash-non-worktree-fake/lease"
+
+  if PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TREEHOUSE_HOME="$acquired" FM_FAKE_TMUX_LOG="$log" \
+    FM_FAKE_TREEHOUSE_LEASE_FILE="$lease" \
+    "$ROOT/bin/fm-home-seed.sh" dash - alpha >/dev/null 2>"$err"; then
+    fail "seed accepted a non-worktree acquired home"
+  fi
+  grep -F 'is not a git worktree' "$err" >/dev/null \
+    || fail "seed did not explain non-worktree acquired-home return refusal"
+  grep -F "treehouse return --force" "$log" >/dev/null \
+    && fail "seed returned a non-worktree acquired home through treehouse"
+  [ -d "$acquired" ] || fail "non-worktree acquired-home refusal removed the acquired path"
+  [ -f "$lease" ] || fail "non-worktree acquired-home refusal cleared lease evidence"
+  pass "home seeding leaves non-worktree acquired homes untouched"
+}
+
 test_home_seed_rolls_back_failed_clone() {
   local home subhome err missing_remote
   home="$TMP_ROOT/rollback-home"
@@ -1781,6 +1808,7 @@ test_home_seed_refuses_treehouse_acquired_home_from_wrong_git_store
 test_home_seed_returns_treehouse_acquired_home_on_assignment_failure
 test_home_seed_warns_when_acquired_home_return_fails
 test_home_seed_does_not_return_unsafe_acquired_home
+test_home_seed_does_not_return_non_worktree_acquired_home
 test_home_seed_rolls_back_failed_clone
 test_home_seed_refuses_missing_filled_charter
 test_home_seed_refuses_placeholder_charter
