@@ -451,7 +451,31 @@ lock=19775
 sidecar=pid=19775;session=fm-lock-liveclaude4-19703;pane=w1:p2;agent=claude;
 ```
 
-That proves a herdr-launched Claude tool command can acquire the firstmate session lock on native Windows after the ancestry walk fails, while preserving a live PID plus herdr session/pane/agent metadata for stale-lock checks.
+That proves a herdr-launched Claude tool command can acquire the firstmate session lock on native Windows after the ancestry walk fails, while preserving a live PID plus herdr session/pane/detected-agent metadata for stale-lock checks.
+
+### Herdr lock identity field verification (2026-07-08)
+
+Verified on native Windows Git Bash against real herdr with isolated sessions `fm-lock-json-claude-2997616` and `fm-lock-live-print-17793`.
+`herdr agent get w1:p1 --session fm-lock-json-claude-2997616` returned a settable `"name"` and, after Claude initialized, a detected `"agent":"claude"` field.
+After `herdr --session fm-lock-json-claude-2997616 agent rename w1:p1 fm-lock-json`, the same `agent get` returned `"name":"fm-lock-json"` while preserving `"agent":"claude"`.
+That proves `bin/fm-lock.sh` must key herdr lock identity off `.result.agent.agent`, falling back to `.result.agent.name` only for older herdr responses that lack the detected field.
+
+Live lock verification used:
+
+```bash
+herdr --session fm-lock-live-print-17793 agent start fm-lock-live --cwd /c/Users/viktor/.treehouse/firstmate-upstream-0bcca5/1/firstmate-upstream --no-focus -- claude --print --dangerously-skip-permissions "<prompt that runs fm-lock.sh>"
+```
+
+The verification poll showed `name=fm-lock-live agent=claude status=idle`, and the scratch lock sidecar contained:
+
+```text
+pid=18140
+session=fm-lock-live-print-17793
+pane=w1:p1
+agent=claude
+```
+
+`HERDR_PROCESS_BASELINE=1 AFTER=1` confirmed the isolated herdr session cleanup returned the machine to the original herdr process count.
 
 ### Native Windows afk and process-release verification (2026-07-08)
 

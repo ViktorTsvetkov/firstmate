@@ -56,18 +56,46 @@ SH
 }
 
 make_fake_herdr_agent() {
-  local fakebin=$1 log=$2 agent=${3:-claude}
+  local fakebin=$1 log=$2 name=${3:-claude} agent=${4:-claude}
   cat > "$fakebin/herdr" <<SH
 #!/usr/bin/env bash
 printf '%s\\n' "\$*" >> "$log"
 case "\$*" in
   "agent get w1:p2 --session fm-lock-test")
-    printf '{"id":"cli:agent:get","result":{"agent":{"name":"$agent","pane_id":"w1:p2"},"type":"agent_info"}}\\n'
+    printf '{"id":"cli:agent:get","result":{"agent":{"name":"$name","agent":"$agent","pane_id":"w1:p2"},"type":"agent_info"}}\\n'
     ;;
   *) exit 1 ;;
 esac
 SH
   chmod +x "$fakebin/herdr"
+}
+
+test_herdr_agent_identity_parser_prefers_detected_agent() {
+  local lock_script out
+  lock_script=$LOCK
+  # shellcheck disable=SC1090
+  FM_LOCK_LIB_ONLY=1 . "$LOCK"
+  LOCK=$lock_script
+
+  out=$(printf '%s\n' '{"name":"fm-abc","agent":"claude"}' | herdr_agent_identity_from_json)
+  [ "$out" = claude ] || fail "parser should prefer detected agent over custom name, got '$out'"
+
+  out=$(printf '%s\n' '{"name":"claude","agent":"claude"}' | herdr_agent_identity_from_json)
+  [ "$out" = claude ] || fail "parser should keep matching detected claude, got '$out'"
+
+  out=$(printf '%s\n' '{"agent":"codex"}' | herdr_agent_identity_from_json)
+  [ "$out" = codex ] || fail "parser should accept agent without name, got '$out'"
+
+  out=$(printf '%s\n' '{"name":"claude"}' | herdr_agent_identity_from_json)
+  [ "$out" = claude ] || fail "parser should fall back to legacy name, got '$out'"
+
+  out=$(printf '%s\n' '{"name":"fm-x","agent":"bash"}' | herdr_agent_identity_from_json)
+  [ "$out" = bash ] || fail "parser should expose non-harness detected agents for rejection, got '$out'"
+  if printf '%s' "$out" | grep -qE "$HARNESS_RE"; then
+    fail "non-harness detected agent should not match HARNESS_RE"
+  fi
+
+  pass "fm-lock herdr agent parser prefers detected agent and falls back to name"
 }
 
 test_windows_herdr_fallback_uses_session_pgid_harness() {
@@ -81,7 +109,7 @@ test_windows_herdr_fallback_uses_session_pgid_harness() {
   pgid=$!
   trap 'kill "$pgid" 2>/dev/null || true' EXIT
   make_fake_ps_herdr_pgid "$fakebin" "$pgid"
-  make_fake_herdr_agent "$fakebin" "$log"
+  make_fake_herdr_agent "$fakebin" "$log" fm-abc claude
 
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_PLATFORM_IS_WINDOWS=yes HERDR_ENV=1 HERDR_SESSION=fm-lock-test HERDR_PANE_ID=w1:p2 "$LOCK")
 
@@ -89,6 +117,7 @@ test_windows_herdr_fallback_uses_session_pgid_harness() {
   [ "$(cat "$home/state/.lock")" = "$pgid" ] || fail "lock file did not record the session-stable harness pgid"
   grep -F "pid=$pgid" "$home/state/.lock.herdr" >/dev/null || fail "herdr lock sidecar did not record the pid"
   grep -F "pane=w1:p2" "$home/state/.lock.herdr" >/dev/null || fail "herdr lock sidecar did not record the pane"
+  grep -F "agent=claude" "$home/state/.lock.herdr" >/dev/null || fail "herdr lock sidecar did not record the detected agent type"
   status=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_PLATFORM_IS_WINDOWS=yes "$LOCK" status)
   [ "$status" = "lock: held by live harness pid $pgid" ] || fail "status did not verify the live herdr sidecar lock: $status"
   grep -F "agent get w1:p2 --session fm-lock-test" "$log" >/dev/null || fail "fallback did not verify the current herdr agent"
@@ -116,11 +145,11 @@ test_windows_herdr_sidecar_overrides_generic_harness_liveness() {
     printf 'agent=claude\n'
   } > "$home/state/.lock.herdr"
 
-  make_fake_herdr_agent "$fakebin" "$log" codex
+  make_fake_herdr_agent "$fakebin" "$log" fm-abc codex
   stale_status=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_PLATFORM_IS_WINDOWS=yes "$LOCK" status)
   [ "$stale_status" = "lock: stale (pid $live_pid dead or not a harness)" ] || fail "stale herdr sidecar lock should not fall back to generic harness liveness: $stale_status"
 
-  make_fake_herdr_agent "$fakebin" "$log" claude
+  make_fake_herdr_agent "$fakebin" "$log" fm-abc claude
   live_status=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_PLATFORM_IS_WINDOWS=yes "$LOCK" status)
   [ "$live_status" = "lock: held by live harness pid $live_pid" ] || fail "matching herdr sidecar lock should remain live: $live_status"
   kill "$live_pid" 2>/dev/null || true
@@ -148,6 +177,7 @@ test_posix_uses_ancestry_without_herdr_fallback() {
   pass "fm-lock POSIX path still uses ancestry and does not consult herdr"
 }
 
+test_herdr_agent_identity_parser_prefers_detected_agent
 test_windows_herdr_fallback_uses_session_pgid_harness
 test_windows_herdr_sidecar_overrides_generic_harness_liveness
 test_posix_uses_ancestry_without_herdr_fallback
