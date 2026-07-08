@@ -27,8 +27,9 @@
 #      own help text says to literally type "default" to affect the default
 #      session, making an accidental hit structurally much harder. --session
 #      <name> is appended too, for defense in depth (verified empirically to
-#      work in trailing position for every herdr subcommand tried, including
-#      `session stop`/`session delete`; see docs/herdr-backend.md).
+#      work in trailing position for the non-variadic destructive cleanup
+#      subcommands used here, including `session stop`/`session delete`; see
+#      docs/herdr-backend.md).
 #   2. herdr_refuse_if_default: a READ-ONLY pre-check, run immediately before
 #      ANY stop/delete, that queries `herdr session list --json` (which
 #      enumerates every session, each carrying its own `default` flag) and

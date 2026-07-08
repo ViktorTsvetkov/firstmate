@@ -1124,8 +1124,12 @@ test_send_key_normalizes_and_targets_pane() {
   PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_key default:w1:p2 Escape' "$ROOT"
   expect_code 0 $? "send_key should succeed"
+  assert_contains "$(cat "$log")" "HERDR_SESSION=default"$'\x1f''--session'$'\x1f''default'$'\x1f''pane'$'\x1f''send-keys' \
+    "send_key must pass --session before the variadic send-keys arguments"
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''escape' "send_key did not normalize Escape to escape"
-  pass "fm_backend_herdr_send_key: normalizes the key and targets the right pane"
+  assert_not_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''escape'$'\x1f''--session' \
+    "send_key must not append --session after send-keys, where herdr treats it as another key"
+  pass "fm_backend_herdr_send_key: normalizes the key, targets the right pane, and uses a leading session selector"
 }
 
 test_kill_is_best_effort() {

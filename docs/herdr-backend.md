@@ -192,7 +192,7 @@ Herdr tasks additionally record:
 | Duplicate task check | `herdr tab list --workspace <id>`, match by `.label` | Herdr does NOT enforce tab-label uniqueness itself; two tabs can share a label. The adapter's own duplicate check is required. |
 | Send literal (unsubmitted) | `herdr pane send-text <pane> <text>` | Does NOT auto-submit, contrary to the original design addendum's guess. Verified directly: a unique marker sent this way sits unexecuted in the composer until a separate Enter. Behaves exactly like tmux's `send-keys -l`. |
 | Send + submit atomically | `herdr pane run <pane> <command>` | Runs and submits a command in one call; used for the two fixed spawn-time commands (`treehouse get`, the `GOTMPDIR` export) exactly where tmux used one `send-keys ... Enter` call. |
-| Send key | `herdr pane send-keys <pane> <key>` | Verified names: `enter`, `escape` (alias `esc`), `ctrl+c` (aliases `C-c`, `c-c`). `ctrl+c` verified to interrupt a running foreground process immediately. |
+| Send key | `herdr --session <session> pane send-keys <pane> <key>` | Verified names: `enter`, `escape` (alias `esc`), `ctrl+c` (aliases `C-c`, `c-c`). `ctrl+c` verified to interrupt a running foreground process immediately. The `--session` flag must be before `pane send-keys` because `send-keys` has a variadic key tail; a trailing `--session` is consumed as another key token instead of a global selector. |
 | Bounded capture | `herdr pane read <pane> --source recent --lines N` | See "Verified bug" below - N is never passed through directly. |
 | Busy state | `herdr agent get <pane>` -> `.result.agent.agent_status` | Verified live against an interactive `claude` session: reports `working` while generating, `done` once idle. Mapped: `working` -> busy; `idle`/`done` -> idle; `blocked` -> idle (surfaced like a stale pane, not suppressed as busy - a blocked agent is stuck waiting on the human, not grinding); anything else -> unknown (the cue for the shared tail-regex fallback). |
 | Kill | `herdr pane close <pane>` | Closing a tab's only (root) pane also closes the tab - no separate tab-close call needed for this adapter's one-pane-per-tab shape. Best-effort: closing an already-closed pane exits non-zero, matching tmux's `kill-window \|\| true` contract. Teardown itself only ever closes the task's own pane/tab, never the workspace - but closing a workspace's LAST tab (verified real-herdr behavior) deletes the workspace as a side effect, so a home's own workspace persists only while at least one task tab remains; see "Workspace lifecycle" above. |
@@ -269,7 +269,8 @@ All implemented backends expose the identical caller-facing verdict vocabulary (
 
 ## Session targeting: the `--session` flag, not `HERDR_SESSION` alone
 
-`HERDR_SESSION=<name>` is the adapter's normal way to select a named herdr session for NON-destructive operations: start, workspace, tab, pane, capture, send, and busy-state calls all still use it (via `fm_backend_herdr_cli`, below).
+`HERDR_SESSION=<name>` is still set for the adapter's NON-destructive operations: start, workspace, tab, pane, capture, send, and busy-state calls.
+Most of those calls use `fm_backend_herdr_cli`; `pane send-keys` uses `fm_backend_herdr_cli_leading_session` because its positional key tail is variadic.
 
 Destructive session cleanup is different, and this distinction was learned the hard way.
 Verified empirically: on the installed herdr 0.7.1 client, neither an exported `HERDR_SESSION` nor an inline `HERDR_SESSION="$name"` prefix reliably targets a CLI subcommand once ANOTHER herdr server (e.g. the captain's live default session) is already bound on the machine - the client silently falls back to whatever server IS running instead of the requested one.
@@ -278,8 +279,9 @@ This is not a hypothetical: it killed the captain's live default herdr server, t
 
 The fix, verified against the real binary in an isolated session (both a genuinely separate isolated session and the default session's untouched state confirmed before and after):
 
-- The `--session <name>` GLOBAL FLAG reliably routes every herdr subcommand tried (`status`, `workspace *`, `tab *`, `pane *`, `agent *`, `server`, `session stop`/`delete`) to the named session, in either leading (`herdr --session <name> <subcommand>`) or trailing (`herdr <subcommand> ... --session <name>`) position - both verified to work identically.
-- `bin/backends/herdr.sh`'s `fm_backend_herdr_cli` helper wraps every herdr invocation in the adapter: it sets `HERDR_SESSION` (kept for cosmetic/forward-compat reasons - harmless, and it is what the client's own JSON echoes back) AND appends a trailing `--session <name>`, so every adapter call is correctly scoped regardless of what else is running on the machine.
+- The `--session <name>` GLOBAL FLAG reliably routes the non-variadic herdr subcommands tried (`status`, `workspace *`, `tab *`, `pane *`, `agent *`, `server`, `session stop`/`delete`) to the named session, in either leading (`herdr --session <name> <subcommand>`) or trailing (`herdr <subcommand> ... --session <name>`) position.
+- `bin/backends/herdr.sh`'s `fm_backend_herdr_cli` helper wraps most herdr invocations in the adapter: it sets `HERDR_SESSION` (kept for cosmetic/forward-compat reasons - harmless, and it is what the client's own JSON echoes back) AND appends a trailing `--session <name>`, so those adapter calls are correctly scoped regardless of what else is running on the machine.
+- `fm_backend_herdr_cli_leading_session` is the exception for `pane send-keys`, whose variadic key tail consumes a trailing `--session` as another key token; it still sets `HERDR_SESSION`, but places `--session <name>` before the subcommand.
 - For destructive test cleanup specifically, use `herdr session stop <name>` / `herdr session delete <name>` (the explicit-by-name forms - `<name>` is a REQUIRED positional argument, so herdr cannot resolve it ambiguously; herdr's own help text requires literally typing `default` to affect the default session), never the ambient `herdr server stop`. `tests/herdr-test-safety.sh`'s `herdr_safe_stop_and_delete` does this, plus a read-only hard guard (`herdr_refuse_if_default`, re-querying `herdr session list --json` immediately before EVERY stop/delete call, refusing on a literal `default` name, a not-found name, or `default:true`) as a second, independent layer - fails closed on any ambiguity.
 - For native-Windows production teardown specifically, `fm_backend_herdr_release_session_if_empty` may use the same explicit stop/delete calls only after `fm_backend_herdr_workspace_count` proves the named session has zero workspaces.
   That guarded path then reaps only a matching `herdr.exe server --session <same-name>` process if herdr leaves one behind.
@@ -440,12 +442,12 @@ Verified on native Windows Git Bash against real herdr 0.7.1-preview.2026-06-30-
 This reproduced the boot-blocker first: a command run inside a plain herdr pane had `HERDR_ENV=1`, `HERDR_PANE_ID=w1:p2`, Git Bash `PPID=1`, and `bin/fm-lock.sh` printed `error: cannot locate harness process in ancestry`.
 The fixed path was then verified by launching Claude through herdr, submitting a Bash-tool command that ran `fm-lock.sh`, and checking the scratch lock directory.
 
-The exact herdr launch shape was:
+The herdr launch shape, with the current required leading session selector for `send-keys`, is:
 
 ```bash
 herdr agent start claude --cwd "C:\Users\viktor\.treehouse\firstmate-upstream-0bcca5\3\firstmate-upstream" --workspace w1 --env FM_STATE_OVERRIDE=/tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703 --env FM_PLATFORM_IS_WINDOWS=yes --session fm-lock-liveclaude4-19703 -- claude --allowedTools Bash --allow-dangerously-skip-permissions
 herdr agent send claude "Use the Bash tool to run exactly: cd /c/Users/viktor/.treehouse/firstmate-upstream-0bcca5/3/firstmate-upstream && FM_STATE_OVERRIDE=/tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703 FM_PLATFORM_IS_WINDOWS=yes ./bin/fm-lock.sh; printf 'LOCKFILE='; cat /tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703/.lock 2>/dev/null || true; printf 'HERDRSIDE='; cat /tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703/.lock.herdr 2>/dev/null || true" --session fm-lock-liveclaude4-19703
-herdr pane send-keys w1:p2 enter --session fm-lock-liveclaude4-19703
+herdr --session fm-lock-liveclaude4-19703 pane send-keys w1:p2 enter
 ```
 
 The verification poll showed herdr still had the live Claude agent:
