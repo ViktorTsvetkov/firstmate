@@ -1467,6 +1467,17 @@ test_composer_state_real_text_is_pending() {
   pass "fm_backend_herdr_composer_state: real composer text reads pending"
 }
 
+test_composer_state_strips_ansi_before_border_scan() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-ansi"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '\033[?25l\033[2K  | > selfcheck-marker-12345 |\033[?25h\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = pending ] || fail "ANSI-decorated composer row should still read pending, got '$out'"
+  pass "fm_backend_herdr_composer_state: strips ANSI controls before scanning the composer border"
+}
+
 test_windows_composer_state_strips_cr_before_border_scan() {
   local dir log resp fb out
   dir="$TMP_ROOT/composer-crlf-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -1600,7 +1611,45 @@ test_send_text_submit_unknown_on_capture_failure() {
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01' "$ROOT" )
   [ "$out" = unknown ] || fail "send_text_submit should report unknown when the post-Enter capture fails, got '$out'"
-  pass "fm_backend_herdr_send_text_submit: reports 'unknown' when the post-Enter capture fails (never retries past an unreadable pane)"
+  pass "fm_backend_herdr_send_text_submit: reports 'unknown' when post-Enter capture remains unreadable after retries"
+}
+
+test_windows_send_text_submit_unknown_after_pane_run_remains_unconfirmed() {
+  local dir log resp fb out enter_count
+  dir="$TMP_ROOT/windows-submit-read-fail"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # 1: pane run atomically types and submits
+  # 2: first capture fails
+  # 3: retry Enter
+  # 4: second capture still fails
+  printf '1\n' > "$resp/2.exit"
+  printf '1\n' > "$resp/4.exit"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 2 0.01 0.01' "$ROOT" )
+  [ "$out" = unknown ] || fail "Windows pane-run submit should remain unconfirmed when composer reads fail, got '$out'"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''run'$'\x1f''w1:p2'$'\x1f''hello captain' "Windows send_text_submit did not use pane run for the initial submit"
+  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
+  [ "$enter_count" -eq 1 ] || fail "Windows send_text_submit should retry once after an unknown first read, got $enter_count Enter(s)"
+  pass "fm_backend_herdr_send_text_submit: Windows pane-run success does not confirm an unreadable composer"
+}
+
+test_send_text_submit_retries_transient_unknown() {
+  local dir log resp fb out enter_count
+  dir="$TMP_ROOT/submit-transient-unknown"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # 1: send-text
+  # 2: send-keys enter
+  # 3: first capture fails transiently
+  # 4: send-keys enter
+  # 5: second capture shows an empty composer
+  printf '1\n' > "$resp/3.exit"
+  printf '  | >                      |\n\n  Shift+Tab:mode\n' > "$resp/5.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 3 0.01 0.01' "$ROOT" )
+  [ "$out" = empty ] || fail "send_text_submit should retry past a transient unknown capture and confirm empty, got '$out'"
+  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
+  [ "$enter_count" -eq 2 ] || fail "send_text_submit should send a second Enter after transient unknown, got $enter_count Enter(s)"
+  pass "fm_backend_herdr_send_text_submit: retries transient unknown composer reads before returning an unconfirmed verdict"
 }
 
 # --- fm-backend.sh dispatch wiring -------------------------------------------
@@ -1994,6 +2043,7 @@ test_composer_state_ghost_placeholder_is_empty
 test_composer_state_forced_windows_literal_prompt_glyph_strip
 test_composer_state_forced_posix_keeps_parameter_prompt_glyph_strip
 test_composer_state_real_text_is_pending
+test_composer_state_strips_ansi_before_border_scan
 test_windows_composer_state_strips_cr_before_border_scan
 test_composer_state_popup_placeholder_fill_is_pending
 test_composer_state_unknown_on_capture_failure
@@ -2003,6 +2053,8 @@ test_send_text_submit_detects_swallowed_enter
 test_send_text_submit_popup_autocomplete_requires_second_enter
 test_send_text_submit_send_failed
 test_send_text_submit_unknown_on_capture_failure
+test_windows_send_text_submit_unknown_after_pane_run_remains_unconfirmed
+test_send_text_submit_retries_transient_unknown
 test_dispatch_routes_herdr_backend
 test_dispatch_busy_state_unknown_for_tmux
 test_dispatch_composer_state_routes_by_backend

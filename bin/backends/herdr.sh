@@ -780,6 +780,7 @@ fm_backend_herdr_composer_state() {  # <target> -> empty|pending|unknown
   local target=$1 cap line trimmed stripped="" found=0
   cap=$(fm_backend_herdr_capture "$target" "$FM_BACKEND_HERDR_COMPOSER_LINES") || { printf 'unknown'; return 0; }
   cap=$(printf '%s' "$cap" | fm_backend_herdr_windows_strip_cr)
+  cap=$(printf '%s' "$cap" | sed -E 's/\x1B\[[0-9;?]*[ -/]*[@-~]//g')
   while IFS= read -r line; do
     trimmed="${line#"${line%%[![:space:]]*}"}"
     trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
@@ -825,9 +826,12 @@ fm_backend_herdr_composer_state() {  # <target> -> empty|pending|unknown
   printf 'pending'
 }
 
-# fm_backend_herdr_send_text_submit: type <text> into <target> once (raw,
-# unsubmitted, via send_literal), then submit with a named Enter key, retried
-# (Enter only, never retyped) until the composer's own row reads empty.
+# fm_backend_herdr_send_text_submit: type <text> into <target> once, submit,
+# then verify and retry with Enter only when the composer's own row still does
+# not read empty. POSIX keeps the verified send-text + Enter sequence; native
+# Windows uses Herdr's atomic pane-run primitive for the initial submit because
+# live Windows showed a separate send-keys Enter can be swallowed while the CLI
+# reports success.
 # Verified hazard (herdr-verification-p2.md "slash/$ autocomplete popup"): a
 # `/`- or `$`-prefixed send opens a completion popup within ~0.1s, exactly
 # like tmux's claude/codex popups, so the caller's <settle> before the first
@@ -852,17 +856,24 @@ fm_backend_herdr_composer_state() {  # <target> -> empty|pending|unknown
 # empty|pending|unknown|send-failed, the SAME vocabulary fm-send.sh already
 # branches on for tmux.
 fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 state
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 state submitted=0
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
-  fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
+  if fm_platform_is_windows; then
+    fm_backend_herdr_send_text_line "$target" "$text" || { printf 'send-failed'; return 0; }
+    submitted=1
+  else
+    fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
+  fi
   sleep "$settle"
   while :; do
-    fm_backend_herdr_send_key "$target" Enter || true
+    if [ "$submitted" -eq 0 ] || [ "$i" -gt 0 ]; then
+      fm_backend_herdr_send_key "$target" Enter || true
+    fi
     sleep "$sleep_s"
     state=$(fm_backend_herdr_composer_state "$target")
-    [ "$state" = pending ] || { printf '%s' "$state"; return 0; }
+    [ "$state" = empty ] && { printf 'empty'; return 0; }
     i=$((i + 1))
-    [ "$i" -lt "$retries" ] || { printf 'pending'; return 0; }
+    [ "$i" -lt "$retries" ] || { printf '%s' "$state"; return 0; }
   done
 }
 
