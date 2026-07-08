@@ -45,6 +45,7 @@ BEAT="$STATE/.last-watcher-beat"
 # "Fresh" reuses the guard's threshold so there is one definition of liveness.
 GRACE=${FM_GUARD_GRACE:-300}
 # How long to wait for a freshly forked watcher to acquire the lock and beat.
+# Native Windows defaults higher because Git Bash can surface the first beacon slowly.
 DEFAULT_CONFIRM_TIMEOUT=10
 if fm_platform_is_windows; then
   DEFAULT_CONFIRM_TIMEOUT=30
