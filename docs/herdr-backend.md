@@ -35,7 +35,8 @@ You do not need to attach for routine supervision: `bin/fm-peek.sh fm-<id>` read
 
 Verify it works by spawning a trivial task with `--backend herdr` and confirming the task's meta records `backend=herdr` plus `herdr_session=`, `herdr_workspace_id=`, `herdr_tab_id=`, and `herdr_pane_id=`; the workspace for your home should show the new `fm-<id>` tab.
 
-Limitations: herdr is experimental, not yet used for `bin/fm-bootstrap.sh`'s required-tools list (the version/tool gate happens at spawn time instead), and carries the known gaps documented below (a small-`--lines` capture bug with a built-in workaround, and a `pane_cwd`-adjacent worktree-discovery symlink fragility) - see "Known gaps and follow-up notes" at the end of this document.
+Limitations: herdr is experimental, not yet used for `bin/fm-bootstrap.sh`'s required-tools list (the version/tool gate happens at spawn time instead), and carries the native-Windows herdr `0.7.1-preview` recovery limitations and known gaps documented below.
+See "Known herdr 0.7.1-preview limitations (native Windows)" for the fresh-session recovery guidance after server death, and "Known gaps and follow-up notes" for follow-up work such as the `pane_cwd`-adjacent worktree-discovery symlink fragility.
 
 ## Status: experimental
 
