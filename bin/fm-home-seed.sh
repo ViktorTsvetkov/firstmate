@@ -7,7 +7,8 @@
 #       a fresh firstmate worktree via "treehouse get --lease", which durably
 #       leases the worktree under the secondmate <id> so the home survives with
 #       no live process and is never recycled until the lease is released with
-#       "treehouse return". Projects are cloned
+#       "treehouse return". The leased home must be a worktree from the same git
+#       common directory as the active firstmate checkout. Projects are cloned
 #       from the active home into the secondmate home's projects/ directory.
 #       That project list is non-exclusive provisioning data. The charter brief
 #       is copied to data/charter.md, newly cloned no-mistakes projects are
@@ -16,7 +17,8 @@
 #       Seeding is transactional: on validation, clone, init, or registry failure,
 #       generated briefs, new homes, new project clones, and registry edits are
 #       rolled back. Treehouse-acquired homes are returned only when the rollback
-#       target is safe; a failed return warns because the lease may still be held.
+#       target is safe and still a git worktree; a failed return warns because
+#       the lease may still be held.
 #       Set FM_SECONDMATE_CHARTER='<charter>' to seed from inline charter text
 #       when no filled charter brief exists. Set FM_SECONDMATE_SCOPE='<scope>'
 #       to override the registry routing scope. Otherwise the registry summary
@@ -33,6 +35,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 REG="$DATA/secondmates.md"
 SUB_HOME_MARKER=".fm-secondmate-home"
+# shellcheck source=bin/fm-git-identity-lib.sh
+. "$SCRIPT_DIR/fm-git-identity-lib.sh"
 
 usage() {
   echo "usage: fm-home-seed.sh <id> <home|-> <project>..." >&2
@@ -470,6 +474,12 @@ acquire_treehouse_home() {
     return 1
   }
   [ -n "$home" ] || { echo "error: treehouse get --lease did not report a firstmate home" >&2; return 1; }
+  refuse_active_home_path "$home" || return 1
+  fm_git_common_dir_matches "$FM_ROOT" "$home" || {
+    echo "error: treehouse get --lease yielded a firstmate home backed by a different git store: $home" >&2
+    seed_return_treehouse_home "$home"
+    return 1
+  }
   printf '%s\n' "$home"
 }
 
@@ -635,6 +645,10 @@ seed_rollback_target() {
 seed_return_treehouse_home() {
   local home=$1 abs_home
   abs_home=$(seed_rollback_target "$home" "treehouse-acquired home") || return 0
+  git -C "$abs_home" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "REFUSED: unsafe treehouse-acquired home rollback target $home is not a git worktree" >&2
+    return 0
+  }
   if ! command -v treehouse >/dev/null 2>&1; then
     echo "warning: failed to return treehouse-acquired home $abs_home during seed rollback; treehouse command not found" >&2
     return 0
