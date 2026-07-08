@@ -164,6 +164,34 @@ test_housekeeping_herdr_persistent_stale_resolves_meta() {
   pass "persistent herdr stale resolves the target from metadata and escalates"
 }
 
+test_housekeeping_herdr_persistent_stale_dedupes_while_buffered() {
+  local dir state key count
+  dir=$(make_supercase stale-herdr-dedupe-buffered)
+  state="$dir/state"
+  fm_write_meta "$state/herdr-loop.meta" "window=default:w1:p9" "backend=herdr"
+  printf 'working: still quiet\n' > "$state/herdr-loop.status"
+  key=$(printf '%s' "herdr-loop" | tr ':/.' '___')
+  (
+    fm_backend_capture() {
+      [ "$1" = herdr ] || fail "expected herdr capture backend, got $1"
+      [ "$2" = "default:w1:p9" ] || fail "expected herdr window target, got $2"
+      printf 'idle prompt\n'
+    }
+    fm_backend_busy_state() {
+      [ "$1" = herdr ] || fail "expected herdr busy backend, got $1"
+      [ "$2" = "default:w1:p9" ] || fail "expected herdr busy target, got $2"
+      printf 'idle'
+    }
+    echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+    echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+  ) || fail "herdr persistent stale buffered dedupe housekeeping failed"
+  count=$(grep -c 'stale persisted' "$state/.subsuper-escalations" 2>/dev/null || true)
+  [ "$count" -eq 1 ] || fail "same persistent Herdr stale was buffered $count time(s), expected exactly once"
+  pass "persistent Herdr stale is buffered once while an away-mode digest remains undelivered"
+}
+
 test_housekeeping_herdr_idle_busy_footer_clears_stale() {
   local dir state key
   dir=$(make_supercase stale-herdr-idle-busy-footer)
@@ -977,6 +1005,7 @@ test_stale_terminal_escalates
 test_housekeeping_persistent_stale_escalates
 test_housekeeping_resumed_stale_cleared
 test_housekeeping_herdr_persistent_stale_resolves_meta
+test_housekeeping_herdr_persistent_stale_dedupes_while_buffered
 test_housekeeping_herdr_idle_busy_footer_clears_stale
 test_housekeeping_herdr_resumed_stale_cleared
 test_housekeeping_orca_persistent_stale_resolves_terminal

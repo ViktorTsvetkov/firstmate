@@ -447,6 +447,17 @@ mark_status_seen() {  # <state> <task> <last-line>
   printf '%s' "$line" > "$state/.subsuper-seen-status-$(_stale_key "$task")"
 }
 
+stale_seen_matches() {  # <state> <task> <window> <last-line>
+  local state=$1 task=$2 win=$3 line=$4 seen
+  seen="$state/.subsuper-seen-stale-$(_stale_key "$task")"
+  [ "$(cat "$seen" 2>/dev/null || true)" = "$win|$line" ]
+}
+
+mark_stale_seen() {  # <state> <task> <window> <last-line>
+  local state=$1 task=$2 win=$3 line=$4
+  printf '%s|%s' "$win" "$line" > "$state/.subsuper-seen-stale-$(_stale_key "$task")"
+}
+
 # Mark every captain-relevant status line a per-wake classification escalated as
 # seen, so the catch-all scan does not re-escalate the same line within
 # HEARTBEAT_SCAN_SECS. Mirrors classify_signal/classify_stale's relevance test.
@@ -608,7 +619,7 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
-  local state=$1 now due f key task win marker age last max_defer oldest
+  local state=$1 now due f key task win marker age last max_defer oldest scan_added
   now=$(_now)
 
   # (1) batch flush
@@ -658,7 +669,14 @@ housekeeping() {  # <state>
     case "$?" in
       0) rm -f "$marker" ;;
       2) rm -f "$marker" ;;
-      *) escalate_add "$state" "stale persisted ${age}s (possible wedge): $win"
+      *) task=$(window_to_task "$win" "$state")
+         last=$(last_status_line "$state/$task.status")
+         if stale_seen_matches "$state" "$task" "$win" "$last"; then
+           stale_marker_remove "$win" "$state"
+           continue
+         fi
+         escalate_add "$state" "stale persisted ${age}s (possible wedge): $win"
+         mark_stale_seen "$state" "$task" "$win" "$last"
          stale_marker_remove "$win" "$state" ;;
     esac
   done
@@ -670,13 +688,18 @@ housekeeping() {  # <state>
   if [ "$(_file_age "$state/.subsuper-last-scan")" -ge "${FM_HEARTBEAT_SCAN_SECS:-$HEARTBEAT_SCAN_SECS_DEFAULT}" ]; then
     _now > "$state/.subsuper-last-scan"
     local seen
+    scan_added=0
     while IFS="$(printf '\t')" read -r f task last; do
       [ -n "$f" ] || continue
       seen="$state/.subsuper-seen-status-$(_stale_key "$task")"
       [ "$(cat "$seen" 2>/dev/null || true)" = "$last" ] && continue
       escalate_add "$state" "$(basename "$f"): $last (catch-all scan)"
       mark_status_seen "$state" "$task" "$last"
+      scan_added=1
     done < <(scan_captain_relevant_statuses "$state")
+    if [ "$scan_added" -eq 1 ] && [ "${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}" -le 0 ]; then
+      escalate_flush "$state" || true
+    fi
   fi
 }
 

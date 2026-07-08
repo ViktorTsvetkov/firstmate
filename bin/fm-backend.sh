@@ -379,9 +379,18 @@ fm_backend_of_selector() {  # <raw-target> <resolved-target> <state-dir>
       [ -f "$meta" ] && { fm_backend_of_meta "$meta"; return 0; }
       ;;
   esac
+  if fm_platform_is_windows && [ -f "$state/$raw.meta" ]; then
+    fm_backend_of_meta "$state/$raw.meta"
+    return 0
+  fi
   if [ -n "$resolved" ]; then
     meta=$(fm_backend_meta_for_window "$resolved" "$state" 2>/dev/null || true)
     [ -n "$meta" ] && { fm_backend_of_meta "$meta"; return 0; }
+  fi
+  if fm_platform_is_windows; then
+    case "$resolved" in
+      *:*:*) printf 'herdr'; return 0 ;;
+    esac
   fi
   printf 'tmux'
 }
@@ -471,6 +480,12 @@ fm_backend_resolve_selector() {  # <raw-target> <state-dir>
       return 0
       ;;
     *)
+      if fm_platform_is_windows && [ -f "$state/$raw.meta" ]; then
+        window=$(fm_backend_target_of_meta "$state/$raw.meta")
+        [ -n "$window" ] || { echo "error: no backend target recorded in $state/$raw.meta" >&2; return 1; }
+        printf '%s' "$window"
+        return 0
+      fi
       meta=$(fm_backend_meta_for_window "$raw" "$state" 2>/dev/null || true)
       if [ -n "$meta" ]; then
         window=$(fm_backend_target_of_meta "$meta")

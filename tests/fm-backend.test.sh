@@ -585,7 +585,7 @@ SH
 }
 
 test_backend_of_selector_matches_explicit_target_meta() {
-  local state=$TMP_ROOT/backend-selector-state
+  local state=$TMP_ROOT/backend-selector-state saved out
   mkdir -p "$state"
   fm_write_meta "$state/herdr-task.meta" "window=default:w1:p2" "backend=herdr"
   fm_write_meta "$state/tmux-task.meta" "window=firstmate:fm-tmux-task"
@@ -609,7 +609,22 @@ test_backend_of_selector_matches_explicit_target_meta() {
   [ "$(fm_backend_of_selector 'manual:outside' 'manual:outside' "$state")" = tmux ] \
     || fail "explicit target with no matching metadata should keep the tmux compatibility default"
 
-  pass "fm_backend_of_selector: fm-<id> and matching explicit targets inherit metadata backend"
+  saved=${FM_PLATFORM_IS_WINDOWS:-}
+  FM_PLATFORM_IS_WINDOWS=yes
+  fm_write_meta "$state/bare-herdr-task.meta" "window=fm-acc2:w5:p4" "backend=herdr"
+  out=$(fm_backend_resolve_selector 'bare-herdr-task' "$state")
+  [ "$out" = "fm-acc2:w5:p4" ] \
+    || fail "Windows bare task id should resolve through same-name metadata before tmux fallback, got '$out'"
+  [ "$(fm_backend_of_selector 'bare-herdr-task' "$out" "$state")" = herdr ] \
+    || fail "Windows bare task id should inherit its metadata backend"
+  [ "$(fm_backend_of_selector 'fm-acc2:w5:p4' 'fm-acc2:w5:p4' "$state")" = herdr ] \
+    || fail "Windows explicit Herdr pane target should infer backend=herdr without metadata"
+  FM_PLATFORM_IS_WINDOWS=no
+  [ "$(fm_backend_of_selector 'other:w5:p4' 'other:w5:p4' "$state")" = tmux ] \
+    || fail "POSIX explicit unmatched multi-colon target should preserve the tmux compatibility default"
+  FM_PLATFORM_IS_WINDOWS=$saved
+
+  pass "fm_backend_of_selector: fm-<id> and matching explicit targets inherit metadata backend; Windows Herdr fallbacks stay gated"
 }
 
 # --- old vs new: fm-send.sh --------------------------------------------------
