@@ -608,6 +608,22 @@ test_no_run_idle_pane_uses_log() {
   pass "no run + idle pane uses the status-log verb"
 }
 
+test_bom_prefixed_done_status_uses_log() {
+  reset_fakes
+  local d; d=$(new_case bom-done)
+  make_repo_on_branch "$d/wt" fm/feat-bom
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-bom.meta" "window=fm:fm-feat-bom" "worktree=$d/wt" "kind=ship"
+  printf '\357\273\277done: Windows PowerShell status\n' > "$d/state/feat-bom.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_BUSY=0
+  local out; out=$(run_crew_state "$d" feat-bom)
+  assert_contains "$out" "state: done" "BOM-prefixed done log -> done"
+  assert_contains "$out" "source: status-log" "BOM-prefixed done log -> status-log source"
+  assert_contains "$out" "Windows PowerShell status" "BOM-prefixed done detail preserved"
+  pass "BOM-prefixed done status uses the shared normalized status-log reader"
+}
+
 test_dead_window_ignores_stale_status_log() {
   reset_fakes
   local d; d=$(new_case dead-window)
@@ -802,6 +818,7 @@ test_no_run_herdr_unknown_uses_backend_capture
 test_no_run_herdr_idle_agent_status_corroborated_by_busy_pane
 test_no_run_herdr_idle_agent_status_and_idle_pane_stays_idle
 test_no_run_idle_pane_uses_log
+test_bom_prefixed_done_status_uses_log
 test_dead_window_ignores_stale_status_log
 test_dead_window_still_reports_terminal_run_step
 test_dead_window_still_reports_active_run_step

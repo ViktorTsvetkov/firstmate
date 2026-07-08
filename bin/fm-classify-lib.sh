@@ -40,9 +40,13 @@ FM_CLASSIFY_CAPTAIN_RE_DEFAULT='done:|needs-decision:|blocked:|failed:|PR ready|
 
 # Return the last non-blank line of a status file (empty if missing/blank).
 last_status_line() {
-  local f=$1
+  local f=$1 line
   [ -e "$f" ] || return 0
-  grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1
+  line=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1)
+  case "$line" in
+    $'\xef\xbb\xbf'*) line=${line#$'\xef\xbb\xbf'} ;;
+  esac
+  printf '%s\n' "$line"
 }
 
 # 0 if the given (last) status line matches a captain-relevant verb.
