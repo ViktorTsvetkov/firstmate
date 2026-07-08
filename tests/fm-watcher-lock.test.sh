@@ -641,6 +641,45 @@ test_arm_waits_for_peer_beacon_after_child_stands_down() {
   pass "arm waits for a peer watcher beacon after child stands down"
 }
 
+test_windows_arm_waits_for_slow_first_beacon() {
+  local dir state fakebin real_touch armout armpid i lock_pid
+  dir=$(make_case arm-windows-slow-first-beacon)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  real_touch=$(command -v touch) || fail "touch not found"
+  armout="$dir/arm.out"
+  cat > "$fakebin/touch" <<SH
+#!/usr/bin/env bash
+set -u
+case " \${*:-} " in
+  *".last-watcher-beat"*)
+    sleep "\${FM_FAKE_SLOW_BEAT_SLEEP:-0}"
+    ;;
+esac
+exec "$real_touch" "\$@"
+SH
+  chmod +x "$fakebin/touch"
+  PATH="$fakebin:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_FAKE_SLOW_BEAT_SLEEP=12 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 180 ]; do
+    grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
+    ! kill -0 "$armpid" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF 'watcher: started pid=' "$armout" || fail "Windows arm did not wait for a slow first beacon: $(cat "$armout" 2>/dev/null || true)"
+  ! grep -qF 'watcher: FAILED' "$armout" || fail "Windows arm reported FAILED before the slow first beacon landed"
+  lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  grep -F "watcher: started pid=$lock_pid (beacon fresh)" "$armout" >/dev/null \
+    || fail "Windows arm did not report the confirmed live watcher (lock '$lock_pid')"
+  is_live_non_zombie "$lock_pid" || fail "Windows arm confirmed a watcher that did not survive"
+  kill "$armpid" "$lock_pid" 2>/dev/null || true
+  wait "$armpid" 2>/dev/null || true
+  pass "Windows arm waits long enough for a slow first watcher beacon"
+}
+
 test_arm_fails_loud_when_no_fresh_watcher_confirmable() {
   local dir state fakebin armout live armpid status
   dir=$(make_case arm-failed-stale)
@@ -689,4 +728,5 @@ test_arm_starts_and_self_heals
 test_arm_hup_cleans_child_and_temp_output
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down
+test_windows_arm_waits_for_slow_first_beacon
 test_arm_fails_loud_when_no_fresh_watcher_confirmable
