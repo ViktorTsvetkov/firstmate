@@ -45,7 +45,11 @@ BEAT="$STATE/.last-watcher-beat"
 # "Fresh" reuses the guard's threshold so there is one definition of liveness.
 GRACE=${FM_GUARD_GRACE:-300}
 # How long to wait for a freshly forked watcher to acquire the lock and beat.
-CONFIRM_TIMEOUT=${FM_ARM_CONFIRM_TIMEOUT:-10}
+DEFAULT_CONFIRM_TIMEOUT=10
+if fm_platform_is_windows; then
+  DEFAULT_CONFIRM_TIMEOUT=30
+fi
+CONFIRM_TIMEOUT=${FM_ARM_CONFIRM_TIMEOUT:-$DEFAULT_CONFIRM_TIMEOUT}
 
 clear_stale_recorded_watcher_lock() {
   local lock_home lock_path lock_identity
