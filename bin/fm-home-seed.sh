@@ -33,6 +33,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 REG="$DATA/secondmates.md"
 SUB_HOME_MARKER=".fm-secondmate-home"
+# shellcheck source=bin/fm-git-identity-lib.sh
+. "$SCRIPT_DIR/fm-git-identity-lib.sh"
 
 usage() {
   echo "usage: fm-home-seed.sh <id> <home|-> <project>..." >&2
@@ -470,6 +472,12 @@ acquire_treehouse_home() {
     return 1
   }
   [ -n "$home" ] || { echo "error: treehouse get --lease did not report a firstmate home" >&2; return 1; }
+  fm_git_common_dir_matches "$FM_ROOT" "$home" || {
+    echo "error: treehouse get --lease yielded a firstmate home backed by a different git store: $home" >&2
+    ( cd "$FM_ROOT" && treehouse return --force "$home" >/dev/null ) \
+      || echo "warning: failed to return mismatched treehouse-acquired home $home; lease may still be held" >&2
+    return 1
+  }
   printf '%s\n' "$home"
 }
 
