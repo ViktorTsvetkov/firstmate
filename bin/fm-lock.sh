@@ -39,12 +39,23 @@ harness_pid() {
   return 1
 }
 
+herdr_agent_identity_from_json() {
+  local out value
+  out=$(cat)
+  value=$(printf '%s\n' "$out" | sed -n 's/.*"agent"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+  if [ -z "$value" ]; then
+    value=$(printf '%s\n' "$out" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+  fi
+  [ -n "$value" ] || return 1
+  printf '%s\n' "$value"
+}
+
 herdr_agent_name() {
   local session=${HERDR_SESSION:-default} out
   [ -n "${HERDR_PANE_ID:-}" ] || return 1
   command -v herdr >/dev/null 2>&1 || return 1
   out=$(herdr agent get "$HERDR_PANE_ID" --session "$session" 2>/dev/null) || return 1
-  printf '%s\n' "$out" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+  printf '%s\n' "$out" | herdr_agent_identity_from_json
 }
 
 harness_pid_windows_herdr() {
@@ -110,6 +121,11 @@ record_herdr_lock() {  # <pid>
     printf 'agent=%s\n' "$agent"
   } > "$LOCK_HERDR"
 }
+
+if [ "${FM_LOCK_LIB_ONLY:-}" = 1 ]; then
+  # shellcheck disable=SC2317 # This file can be sourced or executed.
+  return 0 2>/dev/null || exit 0
+fi
 
 if [ "${1:-}" = "status" ]; then
   if [ ! -f "$LOCK" ]; then echo "lock: free"; exit 0; fi
