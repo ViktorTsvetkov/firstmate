@@ -43,7 +43,7 @@ test_windows_release_empty_session_stops_deletes_and_reaps() {
   local dir log pslog fb
   dir="$TMP_ROOT/windows-empty"; mkdir -p "$dir"; log="$dir/herdr.log"; pslog="$dir/powershell.log"; : > "$log"; : > "$pslog"
   fb=$(make_fakebin "$dir")
-  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_WORKSPACE_COUNT=0 FM_POWERSHELL_LOG="$pslog" \
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes HERDR_SESSION=fmself FM_HERDR_LOG="$log" FM_HERDR_WORKSPACE_COUNT=0 FM_POWERSHELL_LOG="$pslog" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_release_session_if_empty fmtest' "$ROOT"
   expect_code 0 $? "Windows empty-session release should succeed"
   assert_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''list'$'\x1f''--session'$'\x1f''fmtest' \
@@ -57,11 +57,34 @@ test_windows_release_empty_session_stops_deletes_and_reaps() {
   pass "herdr release: Windows empty session is stopped, deleted, and exact-session server cleanup is invoked"
 }
 
+test_windows_release_self_session_returns_before_empty_check() {
+  local dir log pslog fb
+  dir="$TMP_ROOT/windows-self"; mkdir -p "$dir"; log="$dir/herdr.log"; pslog="$dir/powershell.log"; : > "$log"; : > "$pslog"
+  fb=$(make_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes HERDR_SESSION=fmself FM_HERDR_LOG="$log" FM_HERDR_WORKSPACE_COUNT=0 FM_POWERSHELL_LOG="$pslog" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_release_session_if_empty fmself' "$ROOT"
+  expect_code 0 $? "Windows self-session release should succeed as a no-op"
+  [ ! -s "$log" ] || fail "self-session release must not inspect, stop, or delete the ambient firstmate session: $(cat "$log")"
+  [ ! -s "$pslog" ] || fail "self-session release must not run stubborn-process cleanup: $(cat "$pslog")"
+  pass "herdr release: Windows self-session target returns before empty-session cleanup"
+}
+
+test_windows_kill_self_session_is_guarded() {
+  local dir log pslog fb
+  dir="$TMP_ROOT/windows-self-kill"; mkdir -p "$dir"; log="$dir/herdr.log"; pslog="$dir/powershell.log"; : > "$log"; : > "$pslog"
+  fb=$(make_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes HERDR_SESSION=fmself FM_HERDR_LOG="$log" FM_POWERSHELL_LOG="$pslog" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_windows_kill_server_processes fmself' "$ROOT"
+  expect_code 0 $? "Windows self-session server-process cleanup should succeed as a no-op"
+  [ ! -s "$pslog" ] || fail "self-session process cleanup must not call powershell: $(cat "$pslog")"
+  pass "herdr release: Windows self-session process cleanup is guarded"
+}
+
 test_windows_release_nonempty_session_leaves_server_running() {
   local dir log pslog fb
   dir="$TMP_ROOT/windows-nonempty"; mkdir -p "$dir"; log="$dir/herdr.log"; pslog="$dir/powershell.log"; : > "$log"; : > "$pslog"
   fb=$(make_fakebin "$dir")
-  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_WORKSPACE_COUNT=2 FM_POWERSHELL_LOG="$pslog" \
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes HERDR_SESSION=fmself FM_HERDR_LOG="$log" FM_HERDR_WORKSPACE_COUNT=2 FM_POWERSHELL_LOG="$pslog" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_release_session_if_empty fmtest' "$ROOT"
   expect_code 0 $? "Windows non-empty release should succeed as a no-op"
   assert_not_contains "$(cat "$log")" $'\x1f''session'$'\x1f''stop' \
@@ -83,5 +106,7 @@ test_posix_release_is_byte_preserving_noop() {
 }
 
 test_windows_release_empty_session_stops_deletes_and_reaps
+test_windows_release_self_session_returns_before_empty_check
+test_windows_kill_self_session_is_guarded
 test_windows_release_nonempty_session_leaves_server_running
 test_posix_release_is_byte_preserving_noop

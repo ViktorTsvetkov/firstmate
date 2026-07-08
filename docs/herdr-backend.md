@@ -282,6 +282,15 @@ The fix, verified against the real binary in an isolated session (both a genuine
 - For destructive test cleanup specifically, use `herdr session stop <name>` / `herdr session delete <name>` (the explicit-by-name forms - `<name>` is a REQUIRED positional argument, so herdr cannot resolve it ambiguously; herdr's own help text requires literally typing `default` to affect the default session), never the ambient `herdr server stop`. `tests/herdr-test-safety.sh`'s `herdr_safe_stop_and_delete` does this, plus a read-only hard guard (`herdr_refuse_if_default`, re-querying `herdr session list --json` immediately before EVERY stop/delete call, refusing on a literal `default` name, a not-found name, or `default:true`) as a second, independent layer - fails closed on any ambiguity.
 - For native-Windows production teardown specifically, `fm_backend_herdr_release_session_if_empty` may use the same explicit stop/delete calls only after `fm_backend_herdr_workspace_count` proves the named session has zero workspaces.
   That guarded path then reaps only a matching `herdr.exe server --session <same-name>` process if herdr leaves one behind.
+  It must never release the firstmate process's own ambient herdr session (`HERDR_SESSION`, or `default` when unset), even if a transient `workspace list` result would make that shared session look empty.
+  That self-session guard preserves the Windows leak fix for genuinely dedicated sessions while making firstmate unable to stop, delete, or force-kill the shared server it is running inside.
+
+2026-07-08 native-Windows verification, herdr 0.7.1-preview.2026-06-30-3459798b606d:
+
+- With a shared session containing two workspaces (`firstmate` and `crewmate`) and two live agent panes, `HERDR_SESSION=<shared> FM_PLATFORM_IS_WINDOWS=yes fm_backend_herdr_release_session_if_empty <shared>` left the shared server running, kept exactly one matching `herdr.exe server --session <shared>` process, and left the firstmate pane addressable and readable.
+- With a separate empty dedicated session, `HERDR_SESSION=<shared> FM_PLATFORM_IS_WINDOWS=yes fm_backend_herdr_release_session_if_empty <dedicated>` stopped/deleted/reaped that dedicated session, leaving zero matching `herdr.exe server --session <dedicated>` processes.
+- The verification cleaned its throwaway sessions and restored the host's `herdr.exe` process count to the pre-test baseline.
+  Full command output is recorded in `docs/herdr-release-self-session-guard-f6-live.txt`.
 
 ## ID stability across a server restart
 
@@ -398,11 +407,11 @@ POSIX keeps the passive `foreground_cwd` read and normalizes that value with `cy
 - **The headless server is launched detached via `nohup`.** `fm_backend_herdr_server_start` starts the server through `nohup bash -c '... herdr server ...' & disown` on Windows, where the POSIX `( ... & )` backgrounded-subshell form does not reliably survive; POSIX keeps the exact pre-existing subshell launch.
 - **An empty native-Windows session is released after the last task pane closes.** Verified on 2026-07-08 against herdr `0.7.1-preview.2026-06-30-3459798b606d`: `pane close` removed the task tab but left `herdr.exe server --session <name>` alive, and `session stop/delete` could report the isolated session stopped while that process still remained.
   `fm_backend_herdr_kill` now checks the scoped workspace count after closing the pane; when it is zero on Windows, it stops and deletes that exact named session, then reaps only a stubborn `herdr.exe server --session <same-name>` process.
-  POSIX does none of this extra release work, and Windows never releases a session that still has workspaces.
+  POSIX does none of this extra release work, and Windows never releases a session that still has workspaces or the firstmate process's own ambient herdr session.
 - **The composer's leading prompt glyph is stripped as a literal fixed string.** `fm_backend_herdr_composer_state`'s prompt-glyph strip uses `${stripped#'❯ '}`-style exact-prefix removals on Windows, because msys2/Git-Bash bash's byte-oriented `${x#??}`/`${x#?}` parameter expansions mangle the 3-byte prompt glyph U+276F (`❯`) and would misclassify the empty-composer ghost placeholder as pending. POSIX keeps the original byte-count `${x#??}`/`${x#?}` expansions; the ASCII prompts (`>`, `$`, `%`, `#`) are handled on both paths.
 
 On POSIX every conversion is a no-op: no `cygpath` is invoked (the cwd and the resolved shell path are passed through untouched), the CR strip is an identity passthrough, the composer prompt-glyph strip is the original byte-count parameter expansion, and the server launch is the original backgrounded subshell.
-This Windows handling is covered by fake-CLI unit tests (`tests/fm-backend-herdr.test.sh`'s `test_windows_*`/`test_posix_*` pairs, which assert the Windows branch calls `cygpath`/`nohup` and strips CR from each value it compares or returns, and that the POSIX branch never does and stays byte-identical - including that a POSIX empty `foreground_cwd` emits no bytes), by `tests/fm-backend-herdr-handoff.test.sh`, and by `tests/fm-backend-herdr-release.test.sh` for the empty-session release path.
+This Windows handling is covered by fake-CLI unit tests (`tests/fm-backend-herdr.test.sh`'s `test_windows_*`/`test_posix_*` pairs, which assert the Windows branch calls `cygpath`/`nohup` and strips CR from each value it compares or returns, and that the POSIX branch never does and stays byte-identical - including that a POSIX empty `foreground_cwd` emits no bytes), by `tests/fm-backend-herdr-handoff.test.sh`, and by `tests/fm-backend-herdr-release.test.sh` for the empty-session release path, the self-session guard, and the POSIX no-op path.
 
 ### Native Windows handoff verification (2026-07-07)
 
