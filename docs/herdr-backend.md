@@ -388,6 +388,7 @@ This fix is backend-plumbing, not daemon-specific: it also corrects the same liv
 
 **Empirical verification (real herdr, isolated session only).** `tests/fm-afk-inject-herdr-e2e.test.sh` mirrors `tests/fm-afk-inject-e2e.test.sh`'s three scenarios (human-partial-input deferral, swallowed-Enter retry, a normal single digest) plus a fourth (a persistently pending composer that never clears must alarm via `state/.subsuper-inject-wedged`, preserve the buffer, and never crash the daemon) against a real, throwaway, NEVER-default `HERDR_SESSION`, torn down with `herdr_safe_stop_and_delete` exactly like `tests/fm-backend-herdr-smoke.test.sh`.
 The "supervisor pane" is a tiny deterministic bash loop drawing a bordered composer row (not a real harness), matching the structural classifier `fm_backend_herdr_composer_state` expects; a thin `herdr` PATH shim swallows exactly one `pane send-keys <pane> enter` call to simulate the swallowed-Enter scenario, since herdr's real CLI has no built-in way to drop a keystroke.
+The same four-scenario test now runs on native Windows Git Bash with no blanket Windows defer; the 2026-07-08 command output and zero-process-leak baseline are recorded in `docs/herdr-afk-inject-native-windows-2026-07-08.txt`.
 
 Building that test surfaced one more real finding worth recording for anyone writing a similar herdr-driven composer script: `tput cols`, called from WITHIN a script launched into a herdr pane via `pane run`/`send-text`, reported a stale/default `80` regardless of the pane's actual width, while an interactively-typed one-off `tput cols` in the same pane correctly reported its real width (54, in the environment this was verified in).
 A composer redraw that trusts `tput cols` for its own line-wrapping math can therefore silently overflow the pane's real width and wrap across two terminal rows - breaking the structural single-row border classifier's assumption (the digest looked "concatenated with itself" because the guard never fired: the composer read `unknown` instead of `pending`, so the busy/composer guard did not defer a second attempt).
@@ -493,6 +494,7 @@ agent=claude
 
 Verified on native Windows Git Bash against real herdr `0.7.1-preview.2026-06-30-3459798b606d` with an isolated `HERDR_SESSION=fm-afk-liveverify-<pid>`.
 The live script created a real herdr supervisor pane, started `bin/fm-supervise-daemon.sh` with `FM_SUPERVISOR_BACKEND=herdr`, set `.afk`, wrote a delayed `needs-decision:` status event, waited for the daemon to inject the escalation digest, simulated the captain's unmarked return through `should_exit_afk`, cleared `.afk`, stopped the daemon, closed the panes, and ran guarded session cleanup.
+The full native-Windows run of `tests/fm-afk-inject-herdr-e2e.test.sh` is recorded separately in `docs/herdr-afk-inject-native-windows-2026-07-08.txt`; it covers partial-input deferral, swallowed-Enter retry, a normal digest, and the max-defer wedge alarm, with the host `herdr.exe` process count restored to its pre-run baseline.
 The exact observed output was:
 
 ```text
