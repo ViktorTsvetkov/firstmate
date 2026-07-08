@@ -1,0 +1,90 @@
+Native Windows Herdr away-mode E2E evidence
+Date: 2026-07-08
+Host shell: Git Bash for Windows, MINGW64_NT-10.0-26100
+Worktree: C:/Users/viktor/.treehouse/firstmate-upstream-0bcca5/1/firstmate-upstream
+Branch: fm/herdr-afk-undefer-w5
+
+Versions:
+
+Command:
+herdr --version
+
+Output:
+herdr 0.7.1-preview.2026-06-30-3459798b606d
+
+Command:
+jq --version
+
+Output:
+jq-1.8.2
+
+Command:
+shellcheck --version | sed -n "1,2p"
+
+Output:
+ShellCheck - shell script analysis tool
+version: 0.11.0
+
+Pre-run Herdr process baseline:
+
+Command:
+(Get-Process herdr -ErrorAction SilentlyContinue | Measure-Object).Count
+
+Output:
+2
+
+Un-defer check:
+
+Command:
+sed -n "26,40p" tests/fm-afk-inject-herdr-e2e.test.sh
+
+Output:
+set -u
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DAEMON="$ROOT/bin/fm-supervise-daemon.sh"
+
+command -v herdr >/dev/null 2>&1 || { echo "skip: herdr not found"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr adapter)"; exit 0; }
+
+# shellcheck source=tests/herdr-test-safety.sh
+. "$ROOT/tests/herdr-test-safety.sh"
+
+fail() { printf 'not ok - %s\n' "$1" >&2; cleanup_all; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+SESSION="fm-afk-herdr-e2e-$$"
+
+Command:
+Select-String -Path 'tests\fm-afk-inject-herdr-e2e.test.sh' -Pattern 'MINGW','MSYS','CYGWIN','WINDOWS-DEFER' -SimpleMatch
+
+Output:
+No output. No blanket Windows skip markers remain.
+
+Native Windows Git Bash E2E:
+
+Command:
+bash tests/fm-afk-inject-herdr-e2e.test.sh
+
+Output:
+ok - real herdr Scenario A: partial input defers injection; digest arrives clean after idle
+ok - real herdr Scenario B: swallowed Enter (via the herdr shim) produces exactly one clean digest
+ok - real herdr Scenario C: a normal captain status injects exactly one clean single-line sentinel digest
+ok - real herdr Scenario D: a persistently pending composer raises the max-defer wedge alarm, preserves the buffer, and never crashes the daemon
+all real-herdr afk injection e2e tests passed
+
+Post-run Herdr process baseline:
+
+Command:
+(Get-Process herdr -ErrorAction SilentlyContinue | Measure-Object).Count
+
+Output:
+2
+
+Shellcheck:
+
+Command:
+shellcheck -x tests/fm-afk-inject-herdr-e2e.test.sh bin/fm-supervise-daemon.sh bin/backends/herdr.sh
+
+Output:
+No output. Exit code 0.
