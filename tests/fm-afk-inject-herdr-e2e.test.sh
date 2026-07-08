@@ -172,9 +172,13 @@ REAL_HERDR=$(command -v herdr)
 HERDR_SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-herdr-shim.XXXXXX")
 cat > "$HERDR_SHIM_DIR/herdr" <<SHIM
 #!/usr/bin/env bash
-if [ "\${1:-}" = "pane" ] && [ "\${2:-}" = "send-keys" ] && [ -f "$STATE_DIR/.swallow-enter" ]; then
+args=("\$@")
+if [ "\${args[0]:-}" = "--session" ] && [ "\${#args[@]}" -ge 2 ]; then
+  args=("\${args[@]:2}")
+fi
+if [ "\${args[0]:-}" = "pane" ] && [ "\${args[1]:-}" = "send-keys" ] && [ -f "$STATE_DIR/.swallow-enter" ]; then
   found_enter=0
-  for _a in "\$@"; do [ "\$_a" = "enter" ] && found_enter=1; done
+  for _a in "\${args[@]}"; do [ "\$_a" = "enter" ] && found_enter=1; done
   if [ "\$found_enter" = 1 ]; then
     rm -f "$STATE_DIR/.swallow-enter"
     exit 0
