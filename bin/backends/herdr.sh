@@ -866,7 +866,9 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
   fi
   sleep "$settle"
   while :; do
-    { [ "$submitted" -eq 0 ] || [ "$i" -gt 0 ]; } && fm_backend_herdr_send_key "$target" Enter || true
+    if [ "$submitted" -eq 0 ] || [ "$i" -gt 0 ]; then
+      fm_backend_herdr_send_key "$target" Enter || true
+    fi
     sleep "$sleep_s"
     state=$(fm_backend_herdr_composer_state "$target")
     [ "$state" = empty ] && { printf 'empty'; return 0; }
