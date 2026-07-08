@@ -102,6 +102,17 @@ fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
   HERDR_SESSION="$session" herdr "$@" --session "$session"
 }
 
+# fm_backend_herdr_cli_leading_session: run `herdr --session <session> ...`
+# for subcommands whose positional tail is variadic.
+# `pane send-keys <pane> <key> [key ...]` consumes a trailing `--session` as
+# another key token, so the send-key path must put the global session selector
+# before the subcommand while still setting HERDR_SESSION for symmetry.
+fm_backend_herdr_cli_leading_session() {  # <session> <herdr-subcommand-and-args...>
+  local session=$1
+  shift
+  HERDR_SESSION="$session" herdr --session "$session" "$@"
+}
+
 fm_backend_herdr_cwd_arg() {  # <posix-cwd>
   local cwd=$1
   if fm_platform_is_windows; then
@@ -707,7 +718,7 @@ fm_backend_herdr_send_key() {  # <target> <key>
   fm_backend_herdr_target_ready "$1" || return 1
   local key
   key=$(fm_backend_herdr_normalize_key "$2")
-  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" "$key" >/dev/null 2>&1
+  fm_backend_herdr_cli_leading_session "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" "$key" >/dev/null 2>&1
 }
 
 # fm_backend_herdr_capture: bounded plain-text pane capture. Mirrors
