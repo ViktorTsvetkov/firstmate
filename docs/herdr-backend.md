@@ -282,6 +282,15 @@ The fix, verified against the real binary in an isolated session (both a genuine
 - For destructive test cleanup specifically, use `herdr session stop <name>` / `herdr session delete <name>` (the explicit-by-name forms - `<name>` is a REQUIRED positional argument, so herdr cannot resolve it ambiguously; herdr's own help text requires literally typing `default` to affect the default session), never the ambient `herdr server stop`. `tests/herdr-test-safety.sh`'s `herdr_safe_stop_and_delete` does this, plus a read-only hard guard (`herdr_refuse_if_default`, re-querying `herdr session list --json` immediately before EVERY stop/delete call, refusing on a literal `default` name, a not-found name, or `default:true`) as a second, independent layer - fails closed on any ambiguity.
 - For native-Windows production teardown specifically, `fm_backend_herdr_release_session_if_empty` may use the same explicit stop/delete calls only after `fm_backend_herdr_workspace_count` proves the named session has zero workspaces.
   That guarded path then reaps only a matching `herdr.exe server --session <same-name>` process if herdr leaves one behind.
+  It must never release the firstmate process's own ambient herdr session (`HERDR_SESSION`, or `default` when unset), even if a transient `workspace list` result would make that shared session look empty.
+  That self-session guard preserves the Windows leak fix for genuinely dedicated sessions while making firstmate unable to stop, delete, or force-kill the shared server it is running inside.
+
+2026-07-08 native-Windows verification, herdr 0.7.1-preview.2026-06-30-3459798b606d:
+
+- With a shared session containing two workspaces (`firstmate` and `crewmate`) and two live agent panes, `HERDR_SESSION=<shared> FM_PLATFORM_IS_WINDOWS=yes fm_backend_herdr_release_session_if_empty <shared>` left the shared server running, kept exactly one matching `herdr.exe server --session <shared>` process, and left the firstmate pane addressable and readable.
+- With a separate empty dedicated session, `HERDR_SESSION=<shared> FM_PLATFORM_IS_WINDOWS=yes fm_backend_herdr_release_session_if_empty <dedicated>` stopped/deleted/reaped that dedicated session, leaving zero matching `herdr.exe server --session <dedicated>` processes.
+- The verification cleaned its throwaway sessions and restored the host's `herdr.exe` process count to the pre-test baseline.
+  Full command output is recorded in `docs/herdr-release-self-session-guard-f6-live.txt`.
 
 ## ID stability across a server restart
 

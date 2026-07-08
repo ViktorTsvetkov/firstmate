@@ -151,6 +151,7 @@ fm_backend_herdr_windows_kill_server_processes() {  # <session>
   local session=$1
   fm_platform_is_windows || return 0
   [ -n "$session" ] || return 0
+  [ "$session" != "$(fm_backend_herdr_session)" ] || return 0
   # shellcheck disable=SC2016 # The embedded PowerShell expands its own variables.
   FM_HERDR_RELEASE_SESSION="$session" powershell.exe -NoProfile -Command '
 $Session = $env:FM_HERDR_RELEASE_SESSION
@@ -166,6 +167,7 @@ fm_backend_herdr_release_session_if_empty() {  # <session>
   local session=$1 count
   fm_platform_is_windows || return 0
   [ -n "$session" ] || return 0
+  [ "$session" != "$(fm_backend_herdr_session)" ] || return 0
   count=$(fm_backend_herdr_workspace_count "$session" 2>/dev/null || true)
   [ "$count" = 0 ] || return 0
   herdr session stop "$session" --session "$session" --json >/dev/null 2>&1 || true

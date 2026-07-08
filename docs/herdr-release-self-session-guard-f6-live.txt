@@ -1,0 +1,18 @@
+date: 2026-07-08T07:03:31+03:00
+herdr: herdr 0.7.1-preview.2026-06-30-3459798b606d
+baseline herdr.exe count: 1
+shared session: fmselfguard-112060
+dedicated session: fmdedicated-112060
+shared before workspaces: [{"id":"w1","label":"firstmate","pane_count":2},{"id":"w2","label":"crewmate","pane_count":2}]
+shared firstmate pane before release: {"pane_id":"w1:p2","workspace_id":"w1","label":"fm-live-firstmate"}
+shared firstmate pane read before release exit: 0
+shared release command: HERDR_SESSION=fmselfguard-112060 FM_PLATFORM_IS_WINDOWS=yes fm_backend_herdr_release_session_if_empty fmselfguard-112060
+shared status after guarded release: {"running":true,"session":"fmselfguard-112060","compatible":true}
+shared session herdr.exe server count after guarded release: 1
+shared firstmate pane after release: {"pane_id":"w1:p2","workspace_id":"w1","label":"fm-live-firstmate"}
+shared firstmate pane read after release exit: 0
+dedicated release command: HERDR_SESSION=fmselfguard-112060 FM_PLATFORM_IS_WINDOWS=yes fm_backend_herdr_release_session_if_empty fmdedicated-112060
+dedicated status after release: {"running":false,"session":"fmdedicated-112060"}
+dedicated session herdr.exe server count after release: 0
+final herdr.exe count: 1
+baseline restored: yes
