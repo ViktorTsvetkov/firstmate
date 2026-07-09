@@ -26,6 +26,9 @@
 # bin/ script (which sets its own SCRIPT_DIR) or directly by a test.
 _FM_CLASSIFY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _FM_CLASSIFY_LIB_DIR="."
 
+# shellcheck source=bin/fm-platform-lib.sh
+. "$_FM_CLASSIFY_LIB_DIR/fm-platform-lib.sh"
+
 # The crew current-state reader used for the "provably working" decision.
 # Overridable so tests can stub the run-step/pane verdict without a real worktree
 # or no-mistakes install; absent, it points at the real sibling script.
@@ -83,18 +86,23 @@ decode_status_file_utf16() {  # <encoding> <file>
 # write on the first line of a newly-created status log. Decode UTF-16 only when
 # the file's bytes prove it by BOM or by a null-byte pattern at code-unit offsets.
 last_status_line() {
-  local f=$1 line enc
+  local f=$1
   [ -e "$f" ] || return 0
-  enc=$(status_file_utf16_encoding "$f")
-  if [ -n "$enc" ]; then
-    line=$(decode_status_file_utf16 "$enc" "$f" | grep -v '^[[:space:]]*$' | tail -1)
-  else
-    line=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1)
+  if fm_platform_is_windows; then
+    local line enc
+    enc=$(status_file_utf16_encoding "$f")
+    if [ -n "$enc" ]; then
+      line=$(decode_status_file_utf16 "$enc" "$f" | grep -v '^[[:space:]]*$' | tail -1)
+    else
+      line=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1)
+    fi
+    case "$line" in
+      $'\xef\xbb\xbf'*) line=${line#$'\xef\xbb\xbf'} ;;
+    esac
+    printf '%s\n' "$line"
+    return 0
   fi
-  case "$line" in
-    $'\xef\xbb\xbf'*) line=${line#$'\xef\xbb\xbf'} ;;
-  esac
-  printf '%s\n' "$line"
+  grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1
 }
 
 # 0 if the given (last) status line matches a captain-relevant verb.
