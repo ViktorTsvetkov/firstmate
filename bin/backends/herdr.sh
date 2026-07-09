@@ -918,10 +918,8 @@ fm_backend_herdr_composer_state() {  # <target> -> empty|pending|unknown
 #
 # Confirmation signal: when the target is legibly idle before Enter,
 # submission is confirmed by fm_backend_herdr_wait_for_working observing a
-# submit-active agent_status after Enter, NOT by reading the composer's own
-# row. This makes the normal confirmation path cross-agent: it is the same
-# semantic signal regardless of what text a harness's idle composer happens
-# to display.
+# submit-active agent_status after Enter, or by an empty composer row when
+# the post-Enter status remains idle.
 # Echoes empty|pending|unknown|send-failed, the SAME vocabulary fm-send.sh
 # already branches on for tmux ("empty" means "confirmed submitted" for every
 # backend; how each backend confirms it is an internal decision - herdr's is
@@ -939,6 +937,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
     if [ "$baseline" = idle ]; then
       verdict=$(fm_backend_herdr_wait_for_working "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" \
         "$confirm_sleep" "$FM_BACKEND_HERDR_SUBMIT_POLLS")
+      [ "$verdict" = idle ] && verdict=$(fm_backend_herdr_composer_state "$target")
     else
       sleep "$sleep_s"
       verdict=$(fm_backend_herdr_composer_state "$target")
