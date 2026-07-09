@@ -16,9 +16,10 @@
 #       data/secondmates.md is updated.
 #       Seeding is transactional: on validation, clone, init, or registry failure,
 #       generated briefs, new homes, new project clones, and registry edits are
-#       rolled back. Treehouse-acquired homes are returned only when the rollback
-#       target is safe and still a git worktree; a failed return warns because
-#       the lease may still be held.
+#       rolled back. Treehouse-acquired homes are normalized on native Windows
+#       before safety checks, and returned on any post-lease failure when the
+#       rollback target is safe and still a git worktree; a failed return warns
+#       because the lease may still be held.
 #       Set FM_SECONDMATE_CHARTER='<charter>' to seed from inline charter text
 #       when no filled charter brief exists. Set FM_SECONDMATE_SCOPE='<scope>'
 #       to override the registry routing scope. Otherwise the registry summary
