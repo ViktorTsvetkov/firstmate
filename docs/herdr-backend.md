@@ -450,34 +450,53 @@ spawned husklivefix2 harness=sh kind=ship mode=no-mistakes yolo=off window=fm-hu
 The pane capture showed PowerShell starting `C:\PROGRA~1\Git\usr\bin\bash.exe -l`, `treehouse get` entering `~\.treehouse\scratch-project-0fc173\1\scratch-project`, the marked `pwd` probe returning `/c/Users/viktor/.treehouse/scratch-project-0fc173/1/scratch-project`, and the raw launch command printing `live-herdr-ok` from that same worktree.
 `bin/fm-teardown.sh husklivefix2` then returned the treehouse worktree and closed the herdr pane.
 
-### Native Windows session-lock verification (2026-07-08)
+### Native Windows session-lock verification (2026-07-09)
 
-Verified on native Windows Git Bash against real herdr 0.7.1-preview.2026-06-30-3459798b606d with an isolated `HERDR_SESSION=fm-lock-liveclaude4-19703` and a real herdr-launched Claude agent.
-This reproduced the boot-blocker first: a command run inside a plain herdr pane had `HERDR_ENV=1`, `HERDR_PANE_ID=w1:p2`, Git Bash `PPID=1`, and `bin/fm-lock.sh` printed `error: cannot locate harness process in ancestry`.
-The fixed path was then verified by launching Claude through herdr, submitting a Bash-tool command that ran `fm-lock.sh`, and checking the scratch lock directory.
+Verified on native Windows Git Bash against real herdr 0.7.2-preview.2026-07-07-f5354780e4ef with an isolated `HERDR_SESSION=fm-lock-singlefile-live-1598827` and a real Herdr pane whose live agent metadata reported `claude`.
+The verification used the Herdr backend helpers to create the isolated session and pane, then ran `bin/fm-lock.sh` with `FM_PLATFORM_IS_WINDOWS=yes`, `HERDR_ENV=1`, `HERDR_SESSION=fm-lock-singlefile-live-1598827`, and `HERDR_PANE_ID=w1:p2`.
 
-The herdr launch shape, with the current required leading session selector for `send-keys`, is:
-
-```bash
-herdr agent start claude --cwd "C:\Users\viktor\.treehouse\firstmate-upstream-0bcca5\3\firstmate-upstream" --workspace w1 --env FM_STATE_OVERRIDE=/tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703 --env FM_PLATFORM_IS_WINDOWS=yes --session fm-lock-liveclaude4-19703 -- claude --allowedTools Bash --allow-dangerously-skip-permissions
-herdr agent send claude "Use the Bash tool to run exactly: cd /c/Users/viktor/.treehouse/firstmate-upstream-0bcca5/3/firstmate-upstream && FM_STATE_OVERRIDE=/tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703 FM_PLATFORM_IS_WINDOWS=yes ./bin/fm-lock.sh; printf 'LOCKFILE='; cat /tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703/.lock 2>/dev/null || true; printf 'HERDRSIDE='; cat /tmp/fm-lock-liveclaude4-state-fm-lock-liveclaude4-19703/.lock.herdr 2>/dev/null || true" --session fm-lock-liveclaude4-19703
-herdr --session fm-lock-liveclaude4-19703 pane send-keys w1:p2 enter
-```
-
-The verification poll showed herdr still had the live Claude agent:
-
-```json
-{"agent":"claude","agent_status":"working","name":"claude","pane_id":"w1:p2","workspace_id":"w1"}
-```
-
-The scratch lock state then contained:
+The exact observed output was:
 
 ```text
-lock=19775
-sidecar=pid=19775;session=fm-lock-liveclaude4-19703;pane=w1:p2;agent=claude;
+lock acquired: herdr agent herdr:fm-lock-singlefile-live-1598827:w1:p2:term_656315c9392a32
+lock=herdr:fm-lock-singlefile-live-1598827:w1:p2:term_656315c9392a32
+sidecar=no
+lock: held by live herdr agent herdr:fm-lock-singlefile-live-1598827:w1:p2:term_656315c9392a32
+expected=herdr:fm-lock-singlefile-live-1598827:w1:p2:term_656315c9392a32
+agent=claude
 ```
 
-That proves a herdr-launched Claude tool command can acquire the firstmate session lock on native Windows after the ancestry walk fails, while preserving a live PID plus herdr session/pane/detected-agent metadata for stale-lock checks.
+That proves the native-Windows Herdr fallback now uses `state/.lock` as the single commit point and re-derives liveness from live `herdr pane get` and `herdr agent get` data.
+
+Legacy numeric-lock migration was verified on the same native Windows host against real herdr 0.7.2-preview.2026-07-07-f5354780e4ef with an isolated `HERDR_SESSION=fm-lock-legacy-live-2070959`.
+The verification created a real Herdr pane, reported a live `claude` agent on that pane, wrote a test fixture matching the old deployed format (`state/.lock` containing a numeric bash pid and read-only `state/.lock.herdr` containing `pid=`, `session=`, `pane=`, and `agent=claude`), and then ran `bin/fm-lock.sh status`.
+
+The exact observed output was:
+
+```text
+lock: held by live harness pid 2070959
+sidecar_pid=2070959
+pane=w1:p2
+terminal=term_65633a864dace2
+agent=claude
+```
+
+That proves a live pre-upgrade numeric-plus-sidecar Herdr lock is still honored during migration without reintroducing any sidecar writer.
+
+The follow-up cleanup path was verified on 2026-07-10 against real herdr 0.7.2-preview.2026-07-07-f5354780e4ef with an isolated `HERDR_SESSION=fm-lock-cleanup-live-2106569`.
+The verification pre-created a legacy `state/.lock.herdr`, acquired the lock through a live Herdr pane reporting `claude`, and confirmed the new-format owner replaced it while the legacy sidecar was removed.
+
+The exact observed output was:
+
+```text
+lock acquired: herdr agent herdr:fm-lock-cleanup-live-2106569:w1:p2:term_65634629922d92
+lock=herdr:fm-lock-cleanup-live-2106569:w1:p2:term_65634629922d92
+sidecar=no
+expected=herdr:fm-lock-cleanup-live-2106569:w1:p2:term_65634629922d92
+agent=claude
+```
+
+That proves the single-file acquisition path cleans up obsolete legacy sidecars without writing a replacement sidecar.
 
 ### Herdr lock identity field verification (2026-07-08)
 
@@ -492,13 +511,10 @@ Live lock verification used:
 herdr --session fm-lock-live-print-17793 agent start fm-lock-live --cwd /c/Users/viktor/.treehouse/firstmate-upstream-0bcca5/1/firstmate-upstream --no-focus -- claude --print --dangerously-skip-permissions "<prompt that runs fm-lock.sh>"
 ```
 
-The verification poll showed `name=fm-lock-live agent=claude status=idle`, and the scratch lock sidecar contained:
+The verification poll showed `name=fm-lock-live agent=claude status=idle`, and the scratch lock contained a Herdr owner string with the live session, pane, and terminal identity:
 
 ```text
-pid=18140
-session=fm-lock-live-print-17793
-pane=w1:p1
-agent=claude
+herdr:fm-lock-live-print-17793:w1:p1:<terminal-id>
 ```
 
 `HERDR_PROCESS_BASELINE=1 AFTER=1` confirmed the isolated herdr session cleanup returned the machine to the original herdr process count.

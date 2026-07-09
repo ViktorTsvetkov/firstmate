@@ -79,13 +79,13 @@ Personal preferences for one captain's fleet live locally in `data/captain.md`; 
 ## Session lock state
 
 `bin/fm-session-start.sh` acquires the per-home session lock through `bin/fm-lock.sh` before any mutating session-start step.
-The primary lock file is local, gitignored `state/.lock` and contains the PID firstmate will use to decide whether another live harness already owns that home.
+The primary lock file is local, gitignored `state/.lock` and contains either the harness PID firstmate will use to decide whether another live harness already owns that home, or a native-Windows Herdr owner string.
 On POSIX and normal process trees, `fm-lock.sh` finds that PID by walking from the current shell to the owning harness command.
 On native Windows under Herdr, Git Bash tool commands can report `PPID=1`, so the ancestry walk may not reach the harness.
-In that shape, when `HERDR_ENV=1`, `HERDR_PANE_ID` is present, and `herdr agent get` confirms the pane's detected agent type is a verified harness, `fm-lock.sh` records the live MSYS process-group leader instead.
-It also writes `state/.lock.herdr` with `pid=`, `session=`, `pane=`, and `agent=` so future `status` and stale-lock checks verify the same Herdr session, pane, and detected agent type before treating the PID as live.
-The `agent=` value comes from `herdr agent get`'s `.result.agent.agent` field, falling back to `.result.agent.name` only for older Herdr responses that lack the detected field.
-That sidecar is authoritative for native-Windows Herdr locks; if the live Herdr agent no longer matches it, generic process-name liveness is not allowed to keep the lock.
+In that shape, when `HERDR_ENV=1`, `HERDR_PANE_ID` is present, `herdr pane get` returns a `terminal_id`, and `herdr agent get` confirms the pane's detected agent type is a verified harness, `fm-lock.sh` records the Herdr `pane_id` plus `terminal_id` instead.
+For native Windows Herdr sessions, `state/.lock` stores `herdr:<session>:<pane>:<terminal>`, and future `status` and stale-lock checks re-query Herdr live state to verify the same session, pane, terminal id, and a live harness agent before treating the lock as live.
+Pre-upgrade numeric `state/.lock` owners are still recognized during migration and are treated as held when the pid is live and either resolves to a verified harness process or matches a read-only legacy `state/.lock.herdr` sidecar whose live Herdr pane still reports the same verified harness agent.
+The live harness-agent value comes from `herdr agent get`'s `.result.agent.agent` field when present, falling back to `.result.agent.name` for Herdr responses that expose only the agent name.
 
 ## Operational learnings (data/learnings.md)
 
