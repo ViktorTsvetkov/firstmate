@@ -562,7 +562,12 @@ escalate_flush() {  # <state>
   # Single-line wrapper: no embedded newlines (inject_msg also collapses as a
   # safety net, but keeping the source single-line makes the intent explicit).
   msg=$(printf 'Supervisor escalate (%s event(s)): %s (pre-read; re-arm not needed — watcher daemon-managed)' "$n" "$msg")
-  if inject_msg "$msg" "$state"; then : > "$buf"; rm -f "${buf}.since" "$state/.subsuper-inject-wedged"; return 0; fi
+  if inject_msg "$msg" "$state"; then
+    log "inject delivered: ${n} event(s) submitted to supervisor"
+    : > "$buf"
+    rm -f "${buf}.since" "$state/.subsuper-inject-wedged"
+    return 0
+  fi
   return 1
 }
 
@@ -910,6 +915,7 @@ fm_super_main() {
     exit 1
   fi
   echo "$$" > "$PIDFILE"
+  fm_pid_identity "${BASHPID:-$$}" > "$LOCK/pid-identity" 2>/dev/null || true
 
   # --- auto-discover the supervisor BACKEND (tmux vs herdr) first -----------
   # Priority: FM_SUPERVISOR_BACKEND override > $TMUX_PANE (tmux) > $HERDR_ENV=1

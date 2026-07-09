@@ -83,6 +83,14 @@ run_send() {
     "$SEND" "$@" 2>/dev/null
 }
 
+run_send_default_home() {
+  local fb=$1 home=$2 log=$3; shift 3
+  : > "$log"
+  env -u FM_HOME -u FM_STATE_OVERRIDE PATH="$fb:$PATH" \
+    FM_ROOT_OVERRIDE="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+    "$SEND" "$@" 2>/dev/null
+}
+
 # setup_home <name> -> echoes a fresh home dir with an empty state/.
 setup_home() {
   local home="$TMP_ROOT/$1-$RANDOM"
@@ -138,6 +146,35 @@ test_explicit_window_is_not_marked() {
   pass "fm-send: an explicit session:window target is never marked"
 }
 
+test_default_home_selector_is_marked() {
+  local dir fb log home rc got
+  dir="$TMP_ROOT/default-home"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"
+  home=$(setup_home default-home)
+  fm_write_secondmate_meta "$home/state/domain.meta" "$home" "sess:fm-domain"
+  run_send_default_home "$fb" "$home" "$log" "fm-domain" "audit the build"; rc=$?
+  expect_code 0 "$rc" "send with unset FM_HOME should use the repo-root home"
+  got=$(cat "$log")
+  case "$got" in
+    "$FM_FROMFIRST_MARK"audit\ the\ build) : ;;
+    *) fail "default-home send: literal text should be marker+text"$'\n'"--- bytes ---"$'\n'"$(printf '%s' "$got" | od -An -c)" ;;
+  esac
+  pass "fm-send: unset FM_HOME defaults to the repo-root home for selectors"
+}
+
+test_explicit_window_without_state_dir_succeeds() {
+  local dir fb log home rc got
+  dir="$TMP_ROOT/no-state"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"
+  home="$dir/home"; mkdir -p "$home"
+  run_send_default_home "$fb" "$home" "$log" "other:win" "ping"; rc=$?
+  expect_code 0 "$rc" "explicit send should not require state/"
+  got=$(cat "$log")
+  [ "$got" = "ping" ] \
+    || fail "explicit send without state: expected bare text"$'\n'"--- bytes ---"$'\n'"$(printf '%s' "$got" | od -An -c)"
+  pass "fm-send: explicit session:window targets do not require state/"
+}
+
 test_key_path_is_not_marked() {
   local dir fb log home rc
   dir="$TMP_ROOT/key"; mkdir -p "$dir"
@@ -176,5 +213,7 @@ test_marker_is_label_plus_unit_separator() {
 test_secondmate_target_is_marked
 test_crewmate_target_is_not_marked
 test_explicit_window_is_not_marked
+test_default_home_selector_is_marked
+test_explicit_window_without_state_dir_succeeds
 test_key_path_is_not_marked
 test_marker_is_label_plus_unit_separator

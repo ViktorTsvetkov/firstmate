@@ -732,7 +732,7 @@ fm_backend_herdr_send_key() {  # <target> <key>
 # rows for a default-sized pane), instead of clamping to the last N lines - it
 # does not merely ignore the bound, it drops the read entirely. This silently
 # broke exactly the small bounded reads this adapter relies on most (including
-# the composer-state verification read used by send_text_submit). Workaround:
+# the composer-state guard/fallback reads around submit and injection). Workaround:
 # always request a generous fetch far above any realistic viewport height, then
 # trim to the caller's requested bound ourselves with `tail`.
 fm_backend_herdr_capture() {  # <target> <lines>
@@ -746,75 +746,148 @@ fm_backend_herdr_capture() {  # <target> <lines>
   printf '%s' "$out" | tail -n "$lines"
 }
 
-# fm_backend_herdr_composer_state: classify the composer's own row - the
-# interior line of its rounded-corner box - as empty|pending|unknown, scanning
-# a generous tail-window capture of <target>. herdr's CLI exposes no
-# cursor-row primitive (unlike tmux's #{cursor_y}), so this locates the
-# composer row structurally: it is the only captured line whose TRIMMED
-# content both STARTS and ENDS with the same border glyph (│, ┃, or a plain
-# ASCII |). The box's own top/bottom rows use rounded corners (╭─…─╮ / ╰─…─╯),
-# which never match; popup item rows and horizontal separator rows carry no
-# border glyph at all; the footer help line ("Enter:send │ … │ …", verified
-# grok 0.2.82) uses │ only as an INTERIOR separator and does not start with
-# one, so it never matches either. Scans forward and keeps the LAST match, so
-# a border-shaped line earlier in scrollback/a popup can never outrank the
-# real (bottom-anchored) composer row.
+fm_backend_herdr_capture_ansi() {  # <target> <lines>
+  fm_backend_herdr_target_ready "$1" || return 1
+  local lines=${2:-200} fetch out
+  case "$lines" in ''|*[!0-9]*) lines=200 ;; esac
+  fetch=$lines
+  case "$fetch" in ''|*[!0-9]*) fetch=200 ;; *) [ "$fetch" -ge 200 ] || fetch=200 ;; esac
+  out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane read "$FM_BACKEND_HERDR_PANE" --source recent --lines "$fetch" --format ansi 2>/dev/null) || return 1
+  out=$(printf '%s' "$out" | fm_backend_herdr_windows_strip_cr)
+  printf '%s' "$out" | tail -n "$lines"
+}
+
+fm_backend_herdr_strip_ansi() {  # <text>
+  local esc
+  esc=$'\033'
+  printf '%s' "$1" | sed "s/${esc}\\[[0-9;?]*[[:alpha:]]//g"
+}
+
+fm_backend_herdr_prompt_tail_is_faint() {  # <raw-ansi-composer-row>
+  local raw=$1 esc
+  esc=$'\033'
+  case "$raw" in
+    *"${esc}[1m❯ ${esc}[0m${esc}[2m"*|*"${esc}[1m› ${esc}[0m${esc}[2m"*) return 0 ;;
+  esac
+  return 1
+}
+
+# fm_backend_herdr_composer_state: classify the composer's own row as
+# empty|pending|unknown, scanning a generous tail-window capture of <target>.
+# herdr's CLI exposes no cursor-row primitive (unlike tmux's #{cursor_y}), so
+# this locates the composer row structurally, recognizing TWO row shapes and
+# keeping whichever match comes LAST (scanning forward), so a shape earlier in
+# scrollback/a popup can never outrank the real (bottom-anchored) composer row:
 #
-#   empty   - blank, a bare prompt glyph, or known ghost/placeholder text
+#   bordered - a boxed composer (verified grok 0.2.82): the row's TRIMMED
+#              content both STARTS and ENDS with the same border glyph (│, ┃,
+#              or a plain ASCII |). The box's own top/bottom rows use rounded
+#              corners (╭─…─╮ / ╰─…─╯), which never match; popup item rows and
+#              horizontal separator rows carry no border glyph at all; the
+#              footer help line ("Enter:send │ … │ …") uses │ only as an
+#              INTERIOR separator and does not start with one, so it never
+#              matches either.
+#   bare     - an UNBORDERED composer (verified real claude 2.x and codex
+#              0.142.x, both under herdr 0.7.1, docs/herdr-backend.md
+#              "Incident (2026-07-07)"): the row's TRIMMED content starts with
+#              one of the verified agent-specific prompt glyphs but carries no
+#              closing border at all - claude's own live input row is a bare
+#              "❯ …" with no surrounding │, and codex's is a bare "› …". Both
+#              harnesses ALSO render bordered decorative boxes elsewhere (a
+#              startup welcome banner, an update-available notice) that
+#              satisfy the bordered shape above; requiring a match on EITHER
+#              shape and keeping the last (bottom-most) one is what keeps the
+#              live composer winning over a stale decorative box still sitting
+#              in the same capture window. The bare shape is deliberately
+#              narrower than the bordered content classifier so a no-agent shell
+#              fallback prompt (`>`, `$`, `%`, or `#`) falls through to
+#              `unknown` instead of being misread as delivered.
+#
+#   empty   - blank, a bare prompt glyph, known ghost/placeholder text
 #             ("Type a message...", verified grok 0.2.82's empty-composer
-#             placeholder). Safe to treat as submitted.
+#             placeholder), or bare-prompt tail text rendered faint in the ANSI
+#             capture (verified Codex idle suggestions such as "Run /review on
+#             my current changes" and "Find and fix a bug in @filename").
+#             Safe to treat as submitted.
 #   pending - real, unsubmitted text sits in the composer. This deliberately
 #             also covers a slash-command popup that just closed but only
 #             auto-completed or filled an argument-hint placeholder into the
 #             composer (e.g. "/compact" -> "/compact compaction
 #             instructions", verified live against real grok 0.2.82) - that
 #             first Enter is a SELECTION, not a submission.
-#   unknown - the pane could not be read, or no composer row was found in the
-#             captured window.
+#   unknown - the pane could not be read, or no composer row (of either shape)
+#             was found in the captured window.
+#
+# Codex ghost-suggestion note (2026-07-08): herdr's ANSI pane read preserves the
+# faint SGR style Codex uses for idle suggestions after the bare `›` prompt,
+# while real typed input after the same prompt is not faint. The classifier
+# therefore uses ANSI capture when available and treats a faint bare-prompt tail
+# as empty without weakening protection for real typed input.
 FM_BACKEND_HERDR_COMPOSER_LINES=${FM_BACKEND_HERDR_COMPOSER_LINES:-20}
 # Known ghost/placeholder composer text. Extend this if another
 # herdr-verified harness needs its own idle placeholder recognized.
 FM_BACKEND_HERDR_IDLE_RE=${FM_BACKEND_HERDR_IDLE_RE:-'^Type a message\.\.\.$'}
+# Native-Windows Codex under herdr rotates full-line idle suggestions that are
+# not reliably marked faint in pane reads. Keep this gated to the herdr composer
+# classifier and the Windows path so POSIX typed text semantics do not move.
+FM_BACKEND_HERDR_CODEX_IDLE_RE=${FM_BACKEND_HERDR_CODEX_IDLE_RE:-'^(Run /review on my current changes|Improve documentation in @[^[:space:]]+|Find and fix a bug in @[^[:space:]]+|Write tests for @[^[:space:]]+|Summarize recent commits|Implement \{feature\})$'}
+# Known bare (unbordered) prompt glyphs a composer row may start with: ❯
+# (claude) and › (codex) only. Generic shell-style glyphs > $ % # are still
+# recognized after a bordered composer row has already been structurally found.
+FM_BACKEND_HERDR_BARE_PROMPT_RE=${FM_BACKEND_HERDR_BARE_PROMPT_RE:-'^[❯›]'}
 
 fm_backend_herdr_composer_state() {  # <target> -> empty|pending|unknown
-  local target=$1 cap line trimmed stripped="" found=0
-  cap=$(fm_backend_herdr_capture "$target" "$FM_BACKEND_HERDR_COMPOSER_LINES") || { printf 'unknown'; return 0; }
-  cap=$(printf '%s' "$cap" | fm_backend_herdr_windows_strip_cr)
-  cap=$(printf '%s' "$cap" | sed -E 's/\x1B\[[0-9;?]*[ -/]*[@-~]//g')
+  local target=$1 cap line raw_line trimmed stripped="" found=0 shape="" raw_match="" faint_tail=0
+  cap=$(fm_backend_herdr_capture_ansi "$target" "$FM_BACKEND_HERDR_COMPOSER_LINES" 2>/dev/null \
+    || fm_backend_herdr_capture "$target" "$FM_BACKEND_HERDR_COMPOSER_LINES") || { printf 'unknown'; return 0; }
   while IFS= read -r line; do
+    raw_line=$line
+    line=$(fm_backend_herdr_strip_ansi "$line")
     trimmed="${line#"${line%%[![:space:]]*}"}"
     trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
     [ -n "$trimmed" ] || continue
     case "$trimmed" in
-      '│'*'│'|'┃'*'┃'|'|'*'|') : ;;
-      *) continue ;;
+      '│'*'│'|'┃'*'┃'|'|'*'|')
+        stripped=$trimmed
+        shape=bordered
+        raw_match=$raw_line
+        found=1
+        ;;
+      *)
+        if printf '%s' "$trimmed" | grep -qE "$FM_BACKEND_HERDR_BARE_PROMPT_RE"; then
+          stripped=$trimmed
+          shape=bare
+          raw_match=$raw_line
+          found=1
+        fi
+        ;;
     esac
-    stripped=$trimmed
-    found=1
   done < <(printf '%s\n' "$cap")
   [ "$found" -eq 1 ] || { printf 'unknown'; return 0; }
-  # Strip the border glyphs, then trim again.
-  stripped=${stripped//│/}
-  stripped=${stripped//┃/}
-  stripped=${stripped//|/}
-  stripped="${stripped#"${stripped%%[![:space:]]*}"}"
-  stripped="${stripped%"${stripped##*[![:space:]]}"}"
+  if [ "$shape" = bordered ]; then
+    # Strip the border glyphs, then trim again.
+    stripped=${stripped//│/}
+    stripped=${stripped//┃/}
+    stripped=${stripped//|/}
+    stripped="${stripped#"${stripped%%[![:space:]]*}"}"
+    stripped="${stripped%"${stripped##*[![:space:]]}"}"
+  fi
   # A bare prompt glyph = empty composer.
   case "$stripped" in
-    '❯'|'>'|'$'|'%'|'#') printf 'empty'; return 0 ;;
+    '❯'|'›'|'>'|'$'|'%'|'#') printf 'empty'; return 0 ;;
   esac
   # Strip a leading prompt glyph before judging what remains.
   if fm_platform_is_windows; then
     # msys2 bash ${x#??} is byte-oriented and mangles the multibyte prompt glyph;
     # strip the exact literal prompt prefix instead.
     case "$stripped" in
-      '❯ '*) stripped=${stripped#'❯ '} ;; '> '*) stripped=${stripped#'> '} ;; '$ '*) stripped=${stripped#'$ '} ;; '% '*) stripped=${stripped#'% '} ;; '# '*) stripped=${stripped#'# '} ;;
-      '❯'*) stripped=${stripped#'❯'} ;; '>'*) stripped=${stripped#'>'} ;; '$'*) stripped=${stripped#'$'} ;; '%'*) stripped=${stripped#'%'} ;; '#'*) stripped=${stripped#'#'} ;;
+      '❯ '*) stripped=${stripped#'❯ '} ;; '› '*) stripped=${stripped#'› '} ;; '> '*) stripped=${stripped#'> '} ;; '$ '*) stripped=${stripped#'$ '} ;; '% '*) stripped=${stripped#'% '} ;; '# '*) stripped=${stripped#'# '} ;;
+      '❯'*) stripped=${stripped#'❯'} ;; '›'*) stripped=${stripped#'›'} ;; '>'*) stripped=${stripped#'>'} ;; '$'*) stripped=${stripped#'$'} ;; '%'*) stripped=${stripped#'%'} ;; '#'*) stripped=${stripped#'#'} ;;
     esac
   else
     case "$stripped" in
-      '❯ '*|'> '*|'$ '*|'% '*|'# '*) stripped=${stripped#??} ;;
-      '❯'*|'>'*|'$'*|'%'*|'#'*) stripped=${stripped#?} ;;
+      '❯ '*|'› '*|'> '*|'$ '*|'% '*|'# '*) stripped=${stripped#??} ;;
+      '❯'*|'›'*|'>'*|'$'*|'%'*|'#'*) stripped=${stripped#?} ;;
     esac
   fi
   stripped="${stripped#"${stripped%%[![:space:]]*}"}"
@@ -823,57 +896,59 @@ fm_backend_herdr_composer_state() {  # <target> -> empty|pending|unknown
   if printf '%s' "$stripped" | grep -qE "$FM_BACKEND_HERDR_IDLE_RE"; then
     printf 'empty'; return 0
   fi
+  if [ "$shape" = bare ] && fm_platform_is_windows \
+    && printf '%s' "$stripped" | grep -qE "$FM_BACKEND_HERDR_CODEX_IDLE_RE"; then
+    printf 'empty'; return 0
+  fi
+  if [ "$shape" = bare ] && fm_backend_herdr_prompt_tail_is_faint "$raw_match"; then
+    faint_tail=1
+  fi
+  [ "$faint_tail" -eq 1 ] && { printf 'empty'; return 0; }
   printf 'pending'
 }
 
-# fm_backend_herdr_send_text_submit: type <text> into <target> once, submit,
-# then verify and retry with Enter only when the composer's own row still does
-# not read empty. POSIX keeps the verified send-text + Enter sequence; native
-# Windows uses Herdr's atomic pane-run primitive for the initial submit because
-# live Windows showed a separate send-keys Enter can be swallowed while the CLI
-# reports success.
-# Verified hazard (herdr-verification-p2.md "slash/$ autocomplete popup"): a
-# `/`- or `$`-prefixed send opens a completion popup within ~0.1s, exactly
-# like tmux's claude/codex popups, so the caller's <settle> before the first
-# Enter matters here the same way it does for tmux.
+# fm_backend_herdr_send_text_submit: type <text> into <target> once (raw,
+# unsubmitted, via send_literal), then submit with a named Enter key, retried
+# (Enter only, never retyped) until herdr's NATIVE agent-state (agent get)
+# confirms a real turn started. Verified hazard (herdr-verification-p2.md
+# "slash/$ autocomplete popup"): a `/`- or `$`-prefixed send opens a
+# completion popup within ~0.1s, exactly like tmux's claude/codex popups, so
+# the caller's <settle> before the first Enter matters here the same way it
+# does for tmux.
 #
-# Verification strategy (incident 2026-07-03: two grok/herdr crewmates left a
-# fully-typed `/no-mistakes` sitting unsubmitted for minutes, footer still
-# reading "Enter:send", while fm-send exited 0): a prior version of this
-# function verified submission by diffing raw pane content before/after
-# Enter - ANY change counted as "submitted". Live-verified against real grok
-# 0.2.82: a slash command's first Enter closes the completion popup and, for
-# an argument-taking command, EXPANDS the composer text into an argument-hint
-# placeholder ("/compact" -> "/compact compaction instructions") rather than
-# submitting - the raw pane content visibly changes (popup gone, text
-# different) even though nothing was sent, so the old diff-based check
-# false-positived "empty" (submitted) after exactly one Enter, precisely
-# matching the incident. A genuine second Enter was required to actually
-# submit. fm_backend_herdr_composer_state avoids this by classifying the
-# composer's own row specifically: a popup-close-with-placeholder-fill still
-# reads as "pending" (real text remains), so the retry loop below correctly
-# sends the second Enter instead of stopping early. Echoes
-# empty|pending|unknown|send-failed, the SAME vocabulary fm-send.sh already
-# branches on for tmux.
+# Confirmation signal: when the target is legibly idle before Enter,
+# submission is confirmed by fm_backend_herdr_wait_for_working observing a
+# submit-active agent_status after Enter, or by an empty composer row when
+# the post-Enter status remains idle.
+# Echoes empty|pending|unknown|send-failed, the SAME vocabulary fm-send.sh
+# already branches on for tmux ("empty" means "confirmed submitted" for every
+# backend; how each backend confirms it is an internal decision - herdr's is
+# no longer literally "the composer read empty").
 fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 state submitted=0
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 verdict baseline confirm_sleep
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
-  if fm_platform_is_windows; then
-    fm_backend_herdr_send_text_line "$target" "$text" || { printf 'send-failed'; return 0; }
-    submitted=1
-  else
-    fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
-  fi
+  fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
   sleep "$settle"
+  baseline=$(fm_backend_herdr_classify_submit_agent_status \
+    "$(fm_backend_herdr_agent_status_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")")
+  confirm_sleep=$(fm_backend_herdr_submit_confirm_budget "$sleep_s")
   while :; do
-    if [ "$submitted" -eq 0 ] || [ "$i" -gt 0 ]; then
-      fm_backend_herdr_send_key "$target" Enter || true
+    fm_backend_herdr_send_key "$target" Enter || true
+    if [ "$baseline" = idle ]; then
+      verdict=$(fm_backend_herdr_wait_for_working "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" \
+        "$confirm_sleep" "$FM_BACKEND_HERDR_SUBMIT_POLLS")
+      [ "$verdict" = idle ] && verdict=$(fm_backend_herdr_composer_state "$target")
+    else
+      sleep "$sleep_s"
+      verdict=$(fm_backend_herdr_composer_state "$target")
     fi
-    sleep "$sleep_s"
-    state=$(fm_backend_herdr_composer_state "$target")
-    [ "$state" = empty ] && { printf 'empty'; return 0; }
+    case "$verdict" in
+      busy) printf 'empty'; return 0 ;;
+      empty) printf 'empty'; return 0 ;;
+      unknown) printf 'unknown'; return 0 ;;
+    esac
     i=$((i + 1))
-    [ "$i" -lt "$retries" ] || { printf '%s' "$state"; return 0; }
+    [ "$i" -lt "$retries" ] || { printf 'pending'; return 0; }
   done
 }
 
@@ -886,25 +961,83 @@ fm_backend_herdr_kill() {  # <target>
   fm_backend_herdr_release_session_if_empty "$FM_BACKEND_HERDR_SESSION"
 }
 
-# fm_backend_herdr_busy_state: semantic busy state from herdr's native
-# agent-state detection (agent.get), the "first backend where fm_session_busy_state
-# gets real semantics" per the design report. working -> busy (actively
-# generating); idle/done -> idle; blocked -> idle (a blocked agent is stuck
-# waiting on the human, not grinding - the watcher should treat it like a
-# stale pane needing attention, not suppress it as busy); unknown/unparseable
-# -> unknown, the caller's cue to fall back to pane-regex detection.
-fm_backend_herdr_busy_state() {  # <target>
-  fm_backend_herdr_target_ready "$1" || { printf 'unknown'; return 0; }
-  local out status
-  out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" agent get "$FM_BACKEND_HERDR_PANE" 2>/dev/null) || { printf 'unknown'; return 0; }
-  status=$(printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
-  status=$(printf '%s' "$status" | fm_backend_herdr_windows_strip_cr)
-  case "$status" in
+# fm_backend_herdr_classify_agent_status: map a raw `agent get` agent_status
+# value to the adapter's watcher busy|idle|unknown vocabulary. working ->
+# busy (actively generating); idle/done -> idle; blocked -> idle (a blocked
+# agent is stuck waiting on the human, not grinding - the watcher should
+# treat it like a stale pane needing attention, not suppress it as busy);
+# unknown/unparseable/empty -> unknown, the caller's cue to fall back to
+# pane-regex detection.
+fm_backend_herdr_classify_agent_status() {  # <raw-agent_status>
+  case "$1" in
     working) printf 'busy' ;;
     idle|done) printf 'idle' ;;
     blocked) printf 'idle' ;;
     *) printf 'unknown' ;;
   esac
+}
+
+fm_backend_herdr_classify_submit_agent_status() {  # <raw-agent_status>
+  case "$1" in
+    working|blocked) printf 'busy' ;;
+    idle|done) printf 'idle' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+fm_backend_herdr_agent_status_raw() {  # <session> <pane_id>
+  local session=$1 pane_id=$2 out status
+  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null) || { printf ''; return 0; }
+  status=$(printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
+  printf '%s' "$status" | fm_backend_herdr_windows_strip_cr
+}
+
+# fm_backend_herdr_busy_state: semantic busy state from herdr's native
+# agent-state detection (agent.get), the "first backend where fm_session_busy_state
+# gets real semantics" per the design report. See
+# fm_backend_herdr_classify_agent_status for the status->busy/idle/unknown
+# mapping.
+fm_backend_herdr_busy_state() {  # <target>
+  fm_backend_herdr_target_ready "$1" || { printf 'unknown'; return 0; }
+  fm_backend_herdr_classify_agent_status \
+    "$(fm_backend_herdr_agent_status_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")"
+}
+
+FM_BACKEND_HERDR_SUBMIT_POLLS=${FM_BACKEND_HERDR_SUBMIT_POLLS:-6}
+FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=${FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP:-0.6}
+
+fm_backend_herdr_submit_confirm_budget() {  # <caller-budget-seconds>
+  awk -v b="${1:-0}" -v m="$FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP" 'BEGIN {
+    b += 0
+    m += 0
+    if (b < 0) b = 0
+    if (m < 0) m = 0
+    if (m > b) b = m
+    printf "%.4f", b
+  }' 2>/dev/null || printf '%s' "${1:-0}"
+}
+
+fm_backend_herdr_wait_for_working() {  # <session> <pane_id> <budget-seconds> <polls>
+  local session=$1 pane_id=$2 budget=$3 polls=${4:-1} i interval raw bs saw_idle=0
+  case "$polls" in ''|*[!0-9]*|0) polls=1 ;; esac
+  interval=$(awk -v b="$budget" -v p="$polls" 'BEGIN { d = p - 1; if (d < 1) d = 1; v = b / d; if (v < 0) v = 0; printf "%.4f", v }' 2>/dev/null)
+  case "$interval" in ''|*[!0-9.]*) interval=0 ;; esac
+  for ((i = 0; i < polls; i++)); do
+    if [ "$polls" -eq 1 ] || [ "$i" -gt 0 ]; then
+      sleep "$interval"
+    fi
+    raw=$(fm_backend_herdr_agent_status_raw "$session" "$pane_id")
+    bs=$(fm_backend_herdr_classify_submit_agent_status "$raw")
+    case "$bs" in
+      busy) printf 'busy'; return 0 ;;
+      idle) saw_idle=1 ;;
+    esac
+  done
+  if [ "$saw_idle" -eq 1 ]; then
+    printf 'idle'
+  else
+    printf 'unknown'
+  fi
 }
 
 # fm_backend_herdr_pane_for_tab: the root pane id for <tab_id> in <workspace_id>

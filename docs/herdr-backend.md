@@ -173,10 +173,9 @@ A workspace whose label this adapter did not derive (see "Label derivation" abov
 A herdr task's `window=` meta field holds `<herdr-session>:<pane-id>`, for example `default:w1:p2`.
 The pane id itself contains a colon, so the adapter splits on the FIRST colon only, never on every colon.
 This mirrors tmux's `session:window` target shape closely enough that normal task-id resolution still returns a task's recorded `window=` value verbatim.
-Operational commands should prefer the bare `fm-<id>` form, which resolves through this home's metadata.
-On native Windows, `fm_backend_resolve_selector` also accepts a bare task id when `state/<id>.meta` exists, so operators can use the short id even when the Herdr window target is not a tmux-style `fm-<id>` name.
-An explicit herdr target also works when it exactly matches recorded metadata.
-On native Windows, an unmatched multi-colon target is inferred as Herdr as a compatibility fallback; on POSIX, ad hoc non-`fm-` bare-name lookup remains the legacy tmux live-window fallback.
+Operational commands should prefer a task selector, either `fm-<id>` or the exact `<id>`, which resolves through this home's metadata.
+`fm-send.sh` deliberately refuses unresolved guesses: a raw `herdr_pane_id` without its session prefix is rejected with a hint, an unresolved `fm-<id>` is rejected, and an unrecorded explicit target must be well-formed and live before any key or text is sent.
+An explicit herdr target also works when it exactly matches recorded metadata, or when a live unrecorded endpoint is intentionally targeted as an escape hatch outside this firstmate home.
 
 Herdr tasks additionally record:
 
@@ -193,7 +192,7 @@ Herdr tasks additionally record:
 | Headless server start | `HERDR_SESSION=<name> herdr server --session <name>` (backgrounded on POSIX; `nohup`-detached on native Windows - see "Native Windows path handling" below) | A bare socket call does NOT auto-start the server; the adapter always starts-then-polls before any workspace/tab/pane call. This fact is for start only, not cleanup, and the explicit `--session` flag is intentional because `HERDR_SESSION` alone is not safe session targeting. |
 | Duplicate task check | `herdr tab list --workspace <id>`, match by `.label` | Herdr does NOT enforce tab-label uniqueness itself; two tabs can share a label. The adapter's own duplicate check is required. |
 | Send literal (unsubmitted) | `herdr pane send-text <pane> <text>` | Does NOT auto-submit, contrary to the original design addendum's guess. Verified directly: a unique marker sent this way sits unexecuted in the composer until a separate Enter. Behaves exactly like tmux's `send-keys -l`. |
-| Send + submit atomically | `herdr pane run <pane> <command>` | Runs and submits a command in one call; used for the two fixed spawn-time commands (`treehouse get`, the `GOTMPDIR` export) exactly where tmux used one `send-keys ... Enter` call, and for the native-Windows initial text submit before composer verification retries with Enter only. |
+| Send + submit atomically | `herdr pane run <pane> <command>` | Runs and submits a command in one call; used for the fixed spawn-time commands (`treehouse get`, the `GOTMPDIR` export) exactly where tmux used one `send-keys ... Enter` call. |
 | Send key | `herdr --session <session> pane send-keys <pane> <key>` | Verified names: `enter`, `escape` (alias `esc`), `ctrl+c` (aliases `C-c`, `c-c`). `ctrl+c` verified to interrupt a running foreground process immediately. The `--session` flag must be before `pane send-keys` because `send-keys` has a variadic key tail; a trailing `--session` is consumed as another key token instead of a global selector. |
 | Bounded capture | `herdr pane read <pane> --source recent --lines N` | See "Verified bug" below - N is never passed through directly. |
 | Busy state | `herdr agent get <pane>` -> `.result.agent.agent_status` | Verified live against an interactive `claude` session: reports `working` while generating, `done` once idle. Mapped: `working` -> busy; `idle`/`done` -> idle; `blocked` -> idle (surfaced like a stale pane, not suppressed as busy - a blocked agent is stuck waiting on the human, not grinding); anything else -> unknown (the cue for the shared tail-regex fallback). |
@@ -210,7 +209,7 @@ This was the most significant finding of this verification pass.
 `herdr pane read <pane> --source recent --lines N` returns **completely empty output** when `N` is smaller than the pane's current viewport height, instead of clamping to the last `N` lines.
 Reproduced deterministically by binary search against a 23-row pane: `--lines 5/6/8/15` all returned zero bytes; `--lines 20` returned a partial read; `--lines 24` and above returned the full expected content, correctly clamping down even at `--lines 1000`.
 
-This silently broke exactly the small bounded reads the adapter needs most - the composer-state verification read inside the send-and-verify path, and would have affected any small `fm-peek.sh` line count too.
+This silently broke exactly the small bounded reads the adapter needs most - the composer-state guard and fallback reads used around submit and injection, and would have affected any small `fm-peek.sh` line count too.
 Before the workaround, an early version of the real-herdr smoke test flaked intermittently for exactly this reason.
 
 **Workaround:** `fm_backend_herdr_capture` never passes a caller's small requested line count straight through to herdr's own `--lines` flag.
@@ -235,8 +234,8 @@ This does not mask a genuinely human-blocked agent (a permission dialog, not mid
 
 Typing `/mem` into a live `claude` composer inside a herdr pane and reading the pane back within 0.1 seconds already shows the full autocomplete popup.
 This confirms the same hazard tmux already mitigates: submitting immediately after a `/`- or `$`-prefixed send risks Enter landing on a popup selection instead of the literal typed command.
-On POSIX herdr, `fm_backend_herdr_send_text_submit` takes the same settle-before-first-Enter parameter tmux's submit core does.
-On native Windows, the initial submit uses Herdr's atomic `pane run` path described in "Composer verification" below, so there is no separate first Enter before verification retries.
+On herdr, `fm_backend_herdr_send_text_submit` takes the same settle-before-first-Enter parameter tmux's submit core does.
+Both POSIX and native Windows type text literally with `pane send-text`, then submit with a named Enter key and confirm the result as described in "Native agent-state submit confirmation" below.
 The settle-duration DECISION itself lives in `fm-send.sh` (harness-aware, backend-independent), so the backend adapter does not own that policy.
 
 `escape` was verified to dismiss the popup while leaving the typed text in the composer, not a full clear.
@@ -255,22 +254,23 @@ Plain (non-argument) commands like `/new` did submit on the first Enter in the s
 
 The tmux backend was NOT affected by this incident: `fm_tmux_composer_state` reads the actual cursor row and classifies it as pending whenever real text remains, so its retry loop correctly issued the second Enter and landed the same live repro; this was confirmed side-by-side against the same real grok pane.
 
-**Fix:** `fm_backend_herdr_composer_state` replaces the delta-based check with a structural read of the composer's OWN row, mirroring what the cursor-row read gives tmux.
-Herdr's CLI exposes no cursor-row primitive, so the composer row is located by shape instead of position: it is the only line in a generous tail capture whose trimmed content both starts and ends with the same border glyph (`│`, `┃`, or a plain `|`) - the box's own top/bottom rows use rounded corners and never match, popup item rows and separator rows carry no border glyph at all, and the footer help line uses `│` only as an interior separator (never as the first/last character), so none of those can be mistaken for the composer.
-A popup-close-with-placeholder-fill still reads as real content on that row, so it correctly classifies as pending and the retry loop sends the required second Enter, instead of stopping early.
-Known ghost/placeholder composer text (`Type a message...`, verified grok 0.2.82's empty-composer hint) is recognized and still reads as empty.
-`FM_BACKEND_HERDR_IDLE_RE` extends that placeholder match, and `FM_BACKEND_HERDR_COMPOSER_LINES` controls the tail-window scan depth; both are documented in [`docs/configuration.md`](configuration.md).
+**Fix:** `fm_backend_herdr_composer_state` replaces the delta-based check with a structural read of the composer's OWN row, mirroring what the cursor-row read gives tmux where herdr needs composer confirmation.
+Herdr's CLI exposes no cursor-row primitive, so the composer row is located by shape instead of position: the bordered shape is a line in a generous tail capture whose trimmed content both starts and ends with the same border glyph (`│`, `┃`, or a plain `|`), and the bare shape is an unbordered line beginning with a verified agent prompt glyph (`❯` for claude or `›` for codex).
+The scan keeps the last matching row so a stale decorative box earlier in scrollback cannot outrank the live bottom-anchored composer.
+A popup-close-with-placeholder-fill still reads as real content on that row, so fallback composer confirmation classifies it as pending and the retry loop sends the required second Enter, instead of stopping early.
+Known ghost/placeholder composer text (`Type a message...`, verified grok 0.2.82's empty-composer hint), ANSI-faint bare-prompt tails, and native-Windows Codex rotating idle suggestions are recognized and still read as empty.
+`FM_BACKEND_HERDR_IDLE_RE`, `FM_BACKEND_HERDR_CODEX_IDLE_RE`, `FM_BACKEND_HERDR_BARE_PROMPT_RE`, and `FM_BACKEND_HERDR_COMPOSER_LINES` tune those checks and are documented in [`docs/configuration.md`](configuration.md).
 See `fm_backend_herdr_composer_state` and `fm_backend_herdr_send_text_submit` in `bin/backends/herdr.sh` for the implementation, and `tests/fm-backend-herdr.test.sh`'s composer-state and send-text-submit sections (including a dedicated regression test asserting the second Enter is actually sent) for the fake-harness coverage.
 
-## Composer verification: structural border-row read, not delta-based
+## Native agent-state submit confirmation
 
 The herdr adapter's submit-verification no longer diffs raw pane content before/after Enter (see the incident above for why that was unsafe).
-It instead classifies the composer's own row - located structurally, as described above - as empty or pending after each Enter attempt, retried (Enter only, never retyped) until it reads empty or retries are exhausted.
-This mirrors tmux's cursor-row classification in spirit, without needing an equivalent cursor-row read primitive from herdr's CLI.
-ANSI cursor and erase controls are stripped before the structural border-row scan, so terminal decoration cannot hide real composer text from the pending/empty classifier.
-On native Windows, the first submit uses Herdr's atomic `pane run` primitive instead of a separate literal send plus `send-keys Enter`, because live Windows testing showed a separate Enter can be swallowed while the CLI still reports success.
-After that initial submit, Windows and POSIX share the same verification loop: any non-empty verdict, including a transient unreadable/unknown capture, retries with Enter only and returns the final unconfirmed verdict when retries are exhausted.
-A dedicated composer-state or cursor-row read primitive is still a candidate upstream Herdr feature request; it would let this backend eventually verify with the same precision as tmux's native cursor-row read, rather than a structural approximation over a plain-text capture.
+It now types text once with `pane send-text`, records the pre-Enter native `agent_status`, sends Enter, and treats an idle-baseline transition to submit-active `working` or `blocked` as confirmation that a real turn started.
+If the baseline was already non-idle, or if an idle baseline stays idle/done after Enter, the adapter falls back to the ANSI-aware composer classifier described above.
+That fallback is what catches popup selection fills, fast turns that have already reached `done`, and positive swallowed-Enter cases without retyping the message.
+`FM_BACKEND_HERDR_SUBMIT_POLLS` and `FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP` control the native agent-state confirmation window; both are documented in [`docs/configuration.md`](configuration.md).
+An unreadable native agent-state read returns `unknown` rather than retrying blindly, because an inconclusive send is safer than repeated Enters against an unreadable target.
+A dedicated composer-state or cursor-row read primitive is still a candidate upstream Herdr feature request; it would simplify the fallback path, but normal idle-baseline submits already use herdr's native agent-state API as the primary confirmation signal.
 
 All implemented backends expose the identical caller-facing verdict vocabulary (`empty`, `pending`, `unknown`, `send-failed`), so `fm-send.sh` needs no backend-specific branching at all.
 
@@ -376,6 +376,7 @@ On a herdr-based fleet (firstmate itself running with `HERDR_ENV=1`, no `$TMUX_P
 The herdr supervisor-pane fix is transport-layer only - discovery, injection, and the busy/composer guards now dispatch through the SAME `bin/fm-backend.sh` primitives every other backend-aware script already uses (`fm_backend_target_exists`, `fm_backend_busy_state`, `fm_backend_capture`, `fm_backend_send_text_submit`, and the new `fm_backend_composer_state` dispatcher added alongside this work).
 The daemon's classification policy, max-defer escape, `FM_INJECT_MARK` sentinel contract, locks, and wake-queue handling remain backend-independent.
 Current daemon hardening also dedupes repeated persistent-stale escalations while the same window plus last-status combination is already buffered, and flushes catch-all scan findings immediately when `FM_ESCALATE_BATCH_SECS=0`.
+The `/afk` entrypoint now starts this daemon through `bin/fm-afk-start.sh`, which sets `state/.afk`, reuses an identity-matched live daemon lock when present, and otherwise execs the daemon in the foreground so Codex/herdr can track the background session lifecycle instead of reaping a fire-and-forget `nohup ... &` child.
 
 **Discovery.** `FM_SUPERVISOR_TARGET` remains the explicit override, now accepting either a tmux target or a herdr `"<session>:<pane-id>"` target.
 A new `FM_SUPERVISOR_BACKEND` override (`tmux`|`herdr`) resolves independently, mirroring `bin/fm-backend.sh`'s own `fm_backend_detect`: `$TMUX_PANE` set selects tmux (even nested inside herdr, matching the innermost-first rule); `$HERDR_ENV=1` with `$HERDR_PANE_ID` present selects herdr, composing the target as `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"`; absent both, the daemon falls back to tmux/`firstmate:0`, byte-identical to its pre-herdr-support behavior.
@@ -395,7 +396,8 @@ Fixed by routing through `fm_backend_herdr_cli` (which appends `--session` on to
 This fix is backend-plumbing, not daemon-specific: it also corrects the same liveness check other callers use (`bin/fm-session-start.sh`'s per-task endpoint-liveness digest read).
 
 **Empirical verification (real herdr, isolated session only).** `tests/fm-afk-inject-herdr-e2e.test.sh` mirrors `tests/fm-afk-inject-e2e.test.sh`'s three scenarios (human-partial-input deferral, swallowed-Enter retry, a normal single digest) plus a fourth (a persistently pending composer that never clears must alarm via `state/.subsuper-inject-wedged`, preserve the buffer, and never crash the daemon) against a real, throwaway, NEVER-default `HERDR_SESSION`, torn down with `herdr_safe_stop_and_delete` exactly like `tests/fm-backend-herdr-smoke.test.sh`.
-The "supervisor pane" is a tiny deterministic bash loop drawing a bordered composer row (not a real harness), matching the structural classifier `fm_backend_herdr_composer_state` expects; a thin `herdr` PATH shim swallows exactly one `pane send-keys <pane> enter` call to simulate the swallowed-Enter scenario, since herdr's real CLI has no built-in way to drop a keystroke.
+The "supervisor pane" is a tiny deterministic bash loop drawing a bordered composer row (not a real harness binary), and it registers itself as a herdr agent with `pane report-agent` so the native agent-state submit confirmation sees an idle/working/idle cycle around each submitted digest.
+A thin `herdr` PATH shim swallows exactly one `pane send-keys <pane> enter` call to simulate the swallowed-Enter scenario, since herdr's real CLI has no built-in way to drop a keystroke.
 The same four-scenario test now runs on native Windows Git Bash with no blanket Windows defer; the 2026-07-08 command output and zero-process-leak baseline are recorded in `docs/herdr-afk-inject-native-windows-2026-07-08.txt`.
 
 Building that test surfaced one more real finding worth recording for anyone writing a similar herdr-driven composer script: `tput cols`, called from WITHIN a script launched into a herdr pane via `pane run`/`send-text`, reported a stale/default `80` regardless of the pane's actual width, while an interactively-typed one-off `tput cols` in the same pane correctly reported its real width (54, in the environment this was verified in).

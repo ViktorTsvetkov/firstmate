@@ -1013,6 +1013,26 @@ test_scripts_reject_fm_target_label_mismatch() {
   pass "fm-send: fm-id zellij targets reject pane ids whose tab label no longer matches"
 }
 
+test_scripts_reject_exact_task_id_label_mismatch() {
+  local dir state fb neutral status
+  dir="$TMP_ROOT/script-exact-task-label-mismatch"; state="$dir/state"; mkdir -p "$state" "$dir/responses"
+  neutral="$dir/neutral-root"; mkdir -p "$neutral"
+  fm_write_meta "$state/zexact.meta" "window=firstmate:7" "backend=zellij"
+  touch "$state/.last-watcher-beat"
+  zellij_pane_response "$dir" 1 7 3
+  zellij_tab_response "$dir" 2 3 not-the-task
+  fb=$(make_zellij_fakebin "$dir")
+
+  PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$neutral" FM_STATE_OVERRIDE="$state" \
+    FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" FM_ZELLIJ_SESSION_LIST="firstmate" \
+    "$ROOT/bin/fm-send.sh" zexact --key Escape >/dev/null 2>&1
+  status=$?
+  [ "$status" -ne 0 ] || fail "fm-send --key should reject an exact task-id zellij target whose pane belongs to a differently named tab"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''send-keys' \
+    "fm-send should not send a key after exact task-id label verification fails"
+  pass "fm-send: exact task-id zellij targets reject pane ids whose tab label no longer matches"
+}
+
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 
@@ -1067,3 +1087,4 @@ test_send_text_submit_send_failed_when_pane_absent
 test_scripts_route_explicit_target_through_meta_backend
 test_scripts_verify_label_for_fm_targets
 test_scripts_reject_fm_target_label_mismatch
+test_scripts_reject_exact_task_id_label_mismatch
