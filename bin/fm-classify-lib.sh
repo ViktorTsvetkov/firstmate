@@ -82,9 +82,10 @@ decode_status_file_utf16() {  # <encoding> <file>
 }
 
 # Return the last non-blank line of a status file (empty if missing/blank).
-# Strip only a genuine leading UTF-8 BOM, which native Windows PowerShell 5.1 can
-# write on the first line of a newly-created status log. Decode UTF-16 only when
-# the file's bytes prove it by BOM or by a null-byte pattern at code-unit offsets.
+# On native Windows, strip only a genuine leading UTF-8 BOM, which PowerShell 5.1
+# can write on the first line of a newly-created status log, and decode UTF-16
+# only when the file's bytes prove it by BOM or by a null-byte code-unit pattern.
+# On POSIX, keep the historical plain grep/tail read path byte-identical.
 last_status_line() {
   local f=$1
   [ -e "$f" ] || return 0
