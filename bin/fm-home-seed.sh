@@ -37,6 +37,8 @@ REG="$DATA/secondmates.md"
 SUB_HOME_MARKER=".fm-secondmate-home"
 # shellcheck source=bin/fm-git-identity-lib.sh
 . "$SCRIPT_DIR/fm-git-identity-lib.sh"
+# shellcheck source=bin/fm-platform-lib.sh
+. "$SCRIPT_DIR/fm-platform-lib.sh"
 
 usage() {
   echo "usage: fm-home-seed.sh <id> <home|-> <project>..." >&2
@@ -127,8 +129,31 @@ normalize_joined_path() {
   printf '%s\n' "$out"
 }
 
+windows_path_for_check_input() {
+  local path=$1 drive rest
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$path" 2>/dev/null && return 0
+  fi
+  case "$path" in
+    [A-Za-z]:\\*|[A-Za-z]:/*)
+      drive=$(printf '%s' "${path%%:*}" | tr '[:upper:]' '[:lower:]')
+      rest=${path#?:}
+      rest=${rest#/}
+      rest=${rest#\\}
+      rest=${rest//\\//}
+      printf '/%s/%s\n' "$drive" "$rest"
+      ;;
+    *)
+      printf '%s\n' "$path"
+      ;;
+  esac
+}
+
 canonical_path_for_check() {
   local path=$1 probe tail prefix parent base
+  if fm_platform_is_windows; then
+    path=$(windows_path_for_check_input "$path")
+  fi
   case "$path" in
     /*) probe=$path ;;
     *) probe="$(pwd -P)/$path" ;;
@@ -474,7 +499,13 @@ acquire_treehouse_home() {
     return 1
   }
   [ -n "$home" ] || { echo "error: treehouse get --lease did not report a firstmate home" >&2; return 1; }
-  refuse_active_home_path "$home" || return 1
+  refuse_active_home_path "$home" || {
+    seed_return_treehouse_home "$home"
+    return 1
+  }
+  if fm_platform_is_windows; then
+    home=$(resolved_path "$home")
+  fi
   fm_git_common_dir_matches "$FM_ROOT" "$home" || {
     echo "error: treehouse get --lease yielded a firstmate home backed by a different git store: $home" >&2
     seed_return_treehouse_home "$home"
