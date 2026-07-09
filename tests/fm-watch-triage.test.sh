@@ -128,6 +128,26 @@ test_scan_captain_relevant_statuses_classifier() {
   pass "scan_captain_relevant_statuses lists only captain-relevant statuses"
 }
 
+test_windows_utf16_status_classifier() {
+  local dir state last out
+  dir=$(make_case classify-utf16); state="$dir/state"
+  printf '\377\376d\000o\000n\000e\000:\000 \000u\000t\000f\0001\0006\000 \000o\000k\000\n\000' > "$state/utf16.status"
+  last=$(FM_PLATFORM_IS_WINDOWS=yes; last_status_line "$state/utf16.status")
+  [ "$last" = "done: utf16 ok" ] || fail "forced-Windows last_status_line did not decode UTF-16LE status, got '$last'"
+  (FM_PLATFORM_IS_WINDOWS=yes; signal_reason_is_actionable "$state/utf16.status") \
+    || fail "forced-Windows signal classifier missed UTF-16LE done status"
+  out=$(FM_PLATFORM_IS_WINDOWS=yes; scan_captain_relevant_statuses "$state")
+  printf '%s' "$out" | grep -F "utf16.status" >/dev/null \
+    || fail "forced-Windows scan missed UTF-16LE done status"
+
+  printf 'done: utf8 ok\n' > "$state/utf8.status"
+  last=$(FM_PLATFORM_IS_WINDOWS=yes; last_status_line "$state/utf8.status")
+  [ "$last" = "done: utf8 ok" ] || fail "forced-Windows UTF-8 status changed, got '$last'"
+  last=$(FM_PLATFORM_IS_WINDOWS=no; last_status_line "$state/utf16.status")
+  [ "$last" != "done: utf16 ok" ] || fail "forced-POSIX path decoded UTF-16 status"
+  pass "Windows UTF-16 status decode: forced-Windows classifies, UTF-8 unchanged, forced-POSIX stays plain"
+}
+
 test_classifier_primitives() {
   local dir state
   dir=$(make_case classify-primitives); state="$dir/state"
@@ -653,6 +673,7 @@ test_afk_present_reverts_watcher_to_one_shot() {
 test_signal_reason_is_actionable_classifier
 test_stale_is_terminal_classifier
 test_scan_captain_relevant_statuses_classifier
+test_windows_utf16_status_classifier
 test_classifier_primitives
 test_crew_is_provably_working_classifier
 test_signal_crew_provably_working_classifier
