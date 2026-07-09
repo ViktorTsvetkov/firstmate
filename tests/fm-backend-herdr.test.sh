@@ -1424,6 +1424,47 @@ test_composer_state_ghost_placeholder_is_empty() {
   pass "fm_backend_herdr_composer_state: the ghost placeholder text reads empty, not pending"
 }
 
+test_composer_state_windows_codex_rotating_suggestions_are_empty() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-windows-codex-suggestions"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '\342\200\272 Improve documentation in @filename\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = empty ] || fail "Windows Codex rotating ghost suggestion should read as empty, got '$out'"
+
+  printf '\342\200\272 Find and fix a bug in @filename\n' > "$resp/1.out"
+  : > "$log"; rm -f "$resp/.count"
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = empty ] || fail "Windows Codex bug-fix ghost suggestion should read as empty, got '$out'"
+
+  printf '\342\200\272 Write tests for @filename\n' > "$resp/1.out"
+  : > "$log"; rm -f "$resp/.count"
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = empty ] || fail "Windows Codex test-writing ghost suggestion should read as empty, got '$out'"
+
+  printf '\342\200\272 Summarize recent commits\n' > "$resp/1.out"
+  : > "$log"; rm -f "$resp/.count"
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = empty ] || fail "Windows Codex commit-summary ghost suggestion should read as empty, got '$out'"
+
+  printf '\342\200\272 Implement {feature}\n' > "$resp/1.out"
+  : > "$log"; rm -f "$resp/.count"
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = empty ] || fail "Windows Codex implement ghost suggestion should read as empty, got '$out'"
+
+  printf '\342\200\272 Run /review on my current changes\n' > "$resp/1.out"
+  : > "$log"; rm -f "$resp/.count"
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = empty ] || fail "Windows Codex review ghost suggestion should read as empty, got '$out'"
+  pass "fm_backend_herdr_composer_state: Windows Codex rotating suggestions read empty, not pending"
+}
+
 test_composer_state_forced_windows_literal_prompt_glyph_strip() {
   local dir log resp fb out
   dir="$TMP_ROOT/composer-windows-glyph-ghost"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -2003,6 +2044,7 @@ test_windows_busy_state_strips_cr_before_idle_compares
 test_posix_busy_state_plain_idle_done_map_to_idle
 test_composer_state_bare_prompt_is_empty
 test_composer_state_ghost_placeholder_is_empty
+test_composer_state_windows_codex_rotating_suggestions_are_empty
 test_composer_state_forced_windows_literal_prompt_glyph_strip
 test_composer_state_forced_posix_keeps_parameter_prompt_glyph_strip
 test_composer_state_real_text_is_pending

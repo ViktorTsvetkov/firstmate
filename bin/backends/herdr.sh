@@ -827,6 +827,10 @@ FM_BACKEND_HERDR_COMPOSER_LINES=${FM_BACKEND_HERDR_COMPOSER_LINES:-20}
 # Known ghost/placeholder composer text. Extend this if another
 # herdr-verified harness needs its own idle placeholder recognized.
 FM_BACKEND_HERDR_IDLE_RE=${FM_BACKEND_HERDR_IDLE_RE:-'^Type a message\.\.\.$'}
+# Native-Windows Codex under herdr rotates full-line idle suggestions that are
+# not reliably marked faint in pane reads. Keep this gated to the herdr composer
+# classifier and the Windows path so POSIX typed text semantics do not move.
+FM_BACKEND_HERDR_CODEX_IDLE_RE=${FM_BACKEND_HERDR_CODEX_IDLE_RE:-'^(Run /review on my current changes|Improve documentation in @[^[:space:]]+|Find and fix a bug in @[^[:space:]]+|Write tests for @[^[:space:]]+|Summarize recent commits|Implement \{feature\})$'}
 # Known bare (unbordered) prompt glyphs a composer row may start with: ❯
 # (claude) and › (codex) only. Generic shell-style glyphs > $ % # are still
 # recognized after a bordered composer row has already been structurally found.
@@ -890,6 +894,10 @@ fm_backend_herdr_composer_state() {  # <target> -> empty|pending|unknown
   stripped="${stripped%"${stripped##*[![:space:]]}"}"
   [ -n "$stripped" ] || { printf 'empty'; return 0; }
   if printf '%s' "$stripped" | grep -qE "$FM_BACKEND_HERDR_IDLE_RE"; then
+    printf 'empty'; return 0
+  fi
+  if [ "$shape" = bare ] && fm_platform_is_windows \
+    && printf '%s' "$stripped" | grep -qE "$FM_BACKEND_HERDR_CODEX_IDLE_RE"; then
     printf 'empty'; return 0
   fi
   if [ "$shape" = bare ] && fm_backend_herdr_prompt_tail_is_faint "$raw_match"; then
