@@ -37,21 +37,8 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-
-if [ -z "${FM_HOME+x}" ] || [ -z "${FM_HOME:-}" ]; then
-  echo "error: FM_HOME is not set; fm-send refuses to resolve targets without an explicit firstmate home" >&2
-  exit 1
-fi
-
+FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-if [ ! -d "$FM_HOME" ]; then
-  echo "error: FM_HOME '$FM_HOME' is not a directory; fm-send cannot resolve this home's state" >&2
-  exit 1
-fi
-if [ ! -d "$STATE" ]; then
-  echo "error: state dir '$STATE' is missing; fm-send cannot resolve targets for FM_HOME '$FM_HOME'" >&2
-  exit 1
-fi
 
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
@@ -78,6 +65,20 @@ fm_send_meta_for_key_value() {  # <state-dir> <key> <value>
   return 1
 }
 
+fm_send_meta_for_selector() {  # <raw-target> <state-dir>
+  local raw=$1 state=$2 meta
+  case "$raw" in
+    *:*) return 1 ;;
+    fm-*)
+      meta="$state/${raw#fm-}.meta"
+      [ -f "$meta" ] && { printf '%s' "$meta"; return 0; }
+      ;;
+  esac
+  meta="$state/$raw.meta"
+  [ -f "$meta" ] && { printf '%s' "$meta"; return 0; }
+  return 1
+}
+
 fm_send_count_colons() {  # <string>
   local s=$1 no_colons
   no_colons=${s//:/}
@@ -95,7 +96,7 @@ fm_send_resolve_target() {  # <raw-target>
   TARGET_SELECTOR=""
   RESOLUTION_TRIED=""
 
-  meta=$(fm_backend_meta_for_selector "$raw" "$STATE" 2>/dev/null || true)
+  meta=$(fm_send_meta_for_selector "$raw" "$STATE" 2>/dev/null || true)
   if [ -n "$meta" ]; then
     RESOLUTION_TRIED="meta=$meta; backend=from-meta"
     target=$(fm_backend_target_of_meta "$meta")
