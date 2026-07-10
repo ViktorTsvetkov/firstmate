@@ -291,6 +291,25 @@ _collapse_newlines() {  # <text>
 #      named differently). The caller logs a warning in that case.
 # Returns the resolved target on stdout; returns 1 if only the fallback is left
 # AND the fallback does not resolve to a live pane.
+discover_herdr_session_lock_target() {
+  local lock owner rest session pane terminal
+  fm_platform_is_windows || return 1
+  lock="$(_state_root)/.lock"
+  [ -f "$lock" ] || return 1
+  owner=$(cat "$lock" 2>/dev/null || true)
+  case "$owner" in
+    herdr:*:*:*) ;;
+    *) return 1 ;;
+  esac
+  rest=${owner#herdr:}
+  session=${rest%%:*}
+  rest=${rest#*:}
+  terminal=${rest##*:}
+  pane=${rest%:*}
+  [ -n "$session" ] && [ -n "$pane" ] && [ -n "$terminal" ] || return 1
+  printf '%s:%s' "$session" "$pane"
+}
+
 discover_supervisor_target() {
   local herdr_target
   if [ -n "${FM_SUPERVISOR_TARGET:-}" ]; then
@@ -308,8 +327,64 @@ discover_supervisor_target() {
     printf '%s:%s' "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE"
     return 0
   fi
+  if herdr_target=$(discover_herdr_session_lock_target); then
+    printf '%s' "$herdr_target"
+    return 0
+  fi
   printf '%s' "$FM_SUPERVISOR_TARGET_DEFAULT"
   return 1
+}
+
+supervisor_target_source() {
+  local mode=${1:-with-override}
+  if [ "$mode" != "without-override" ] && [ -n "${FM_SUPERVISOR_TARGET:-}" ]; then
+    printf 'FM_SUPERVISOR_TARGET'
+  elif [ -n "${TMUX_PANE:-}" ]; then
+    printf 'TMUX_PANE'
+  elif [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+    printf 'HERDR_ENV(HERDR_PANE_ID)'
+  elif discover_herdr_session_lock_target >/dev/null 2>&1; then
+    printf 'SESSION_LOCK'
+  else
+    printf 'FALLBACK(firstmate:0)'
+  fi
+}
+
+resolve_supervisor_target_for_startup() {
+  local backend=$1 discovered target_source explicit_target fallback fallback_source
+  explicit_target=${FM_SUPERVISOR_TARGET:-}
+  target_source=$(supervisor_target_source)
+  if discovered=$(discover_supervisor_target); then
+    : # resolved cleanly
+  else
+    if fm_platform_is_windows && [ "$backend" = herdr ]; then
+      echo "warn: could not auto-discover supervisor pane (no FM_SUPERVISOR_TARGET, TMUX_PANE, HERDR_ENV/HERDR_PANE_ID, or herdr session-lock pane); falling back to '$discovered' - verify this is firstmate's pane" >&2
+    else
+      echo "warn: could not auto-discover supervisor pane (no FM_SUPERVISOR_TARGET, TMUX_PANE, or HERDR_ENV/HERDR_PANE_ID); falling back to '$discovered' — verify this is firstmate's pane" >&2
+    fi
+  fi
+  if fm_backend_target_exists "$backend" "$discovered"; then
+    printf '%s\t%s' "$discovered" "$target_source"
+    return 0
+  fi
+  if [ -n "$explicit_target" ] && fm_platform_is_windows && [ "$backend" = herdr ]; then
+    fallback_source=$(supervisor_target_source without-override)
+    if fallback=$(FM_SUPERVISOR_TARGET='' discover_supervisor_target) \
+       && fm_backend_target_exists "$backend" "$fallback"; then
+      log "startup: ignoring stale FM_SUPERVISOR_TARGET '$explicit_target'; using $fallback_source target '$fallback'"
+      printf '%s\t%s' "$fallback" "$fallback_source(stale FM_SUPERVISOR_TARGET ignored)"
+      return 0
+    fi
+  fi
+  printf '%s\t%s' "$discovered" "$target_source"
+  return 1
+}
+
+should_shutdown_on_afk_inactive_tick() {
+  local backend=$1 state=$2
+  fm_platform_is_windows || return 1
+  [ "$backend" = herdr ] || return 1
+  ! afk_active "$state"
 }
 
 # Auto-discover the supervisor's BACKEND at startup - independent of the
@@ -956,26 +1031,16 @@ fm_super_main() {
   # --- auto-discover the supervisor target (the pane running firstmate) -----
   # Priority: FM_SUPERVISOR_TARGET override > $TMUX_PANE (tmux; inherited from
   # the pane that launched the daemon, normally firstmate's own) >
-  # $HERDR_PANE_ID (herdr, composed into "<session>:<pane-id>") > firstmate:0
-  # fallback. Exporting the result into FM_SUPERVISOR_TARGET makes inject_msg
-  # (which reads that env var) use the discovered pane without an extra global.
-  local discovered target_source
-  target_source="FM_SUPERVISOR_TARGET"
-  if [ -z "${FM_SUPERVISOR_TARGET:-}" ]; then
-    if [ -n "${TMUX_PANE:-}" ]; then
-      target_source="TMUX_PANE"
-    elif [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
-      target_source="HERDR_ENV(HERDR_PANE_ID)"
-    else
-      target_source="FALLBACK(firstmate:0)"
-    fi
+  # $HERDR_PANE_ID (herdr, composed into "<session>:<pane-id>") > Windows/herdr
+  # session lock > firstmate:0 fallback. Exporting the result into
+  # FM_SUPERVISOR_TARGET makes inject_msg (which reads that env var) use the
+  # discovered pane without an extra global.
+  local resolution target_source target_valid=1
+  if resolution=$(resolve_supervisor_target_for_startup "$BACKEND"); then
+    target_valid=0
   fi
-  if discovered=$(discover_supervisor_target); then
-    : # resolved cleanly
-  else
-    echo "warn: could not auto-discover supervisor pane (no FM_SUPERVISOR_TARGET, TMUX_PANE, or HERDR_ENV/HERDR_PANE_ID); falling back to '$discovered' — verify this is firstmate's pane" >&2
-  fi
-  FM_SUPERVISOR_TARGET="$discovered"
+  FM_SUPERVISOR_TARGET="${resolution%%	*}"
+  target_source="${resolution#*	}"
   local TARGET="$FM_SUPERVISOR_TARGET"
 
   # --- validate supervisor target at startup (a missing target is a typo) ---
@@ -983,7 +1048,7 @@ fm_super_main() {
   # probe, so a herdr supervisor pane is checked via the herdr adapter; for
   # backend=tmux this runs the exact same `tmux display-message -p -t "$TARGET"
   # '#{pane_id}'` call as before.
-  if ! fm_backend_target_exists "$BACKEND" "$TARGET"; then
+  if [ "$target_valid" -ne 0 ]; then
     echo "error: supervisor target '$TARGET' does not resolve to a $BACKEND pane; set FM_SUPERVISOR_TARGET" >&2
     log "startup failed: target '$TARGET' not found (backend=$BACKEND)"
     fm_lock_release "$LOCK" 2>/dev/null || true
@@ -1042,6 +1107,11 @@ fm_super_main() {
 
   local rc reason
   while true; do
+    if should_shutdown_on_afk_inactive_tick "$BACKEND" "$STATE"; then
+      log "afk inactive on housekeeping tick; shutting down"
+      cleanup
+    fi
+
     # --- pane-gone guard (preserved) ---------------------------------------
     # With the #29 watcher's enqueue-before-suppress, a wake is no longer
     # swallowed by running the watcher with no injection target. We still back
