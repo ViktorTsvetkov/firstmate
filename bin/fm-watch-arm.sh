@@ -103,7 +103,7 @@ watch_output_has_already_running() {
 }
 
 wait_windows_recorded_watcher() {
-  local recorded_pid=$1 rc=0 child_watcher_pid=
+  local recorded_pid=$1 rc=0 child_watcher_pid= i
   while healthy_watcher && [ "$HEALTHY_PID" = "$recorded_pid" ]; do
     child_watcher_pid=$(cat "$child_pid_file" 2>/dev/null || true)
     if [ -n "$child_watcher_pid" ] && [ "$child_watcher_pid" = "$recorded_pid" ]; then
@@ -134,6 +134,31 @@ wait_windows_recorded_watcher() {
     sleep 0.2
   done
   if healthy_watcher && [ "$HEALTHY_PID" = "$recorded_pid" ]; then
+    if [ "$child_done" -eq 0 ]; then
+      child_watcher_pid=$(cat "$child_pid_file" 2>/dev/null || true)
+      if [ -n "$child_watcher_pid" ] && [ "$child_watcher_pid" = "$recorded_pid" ]; then
+        echo "watcher: started pid=$recorded_pid (beacon fresh)"
+        wait "$child"
+        rc=$?
+        child_done=1
+        print_watch_output "$child_out"
+        rm -f "$child_out" "$child_pid_file" 2>/dev/null || true
+        exit "$rc"
+      fi
+      if fm_pid_alive "$child"; then
+        kill -TERM "$child" 2>/dev/null || true
+        i=0
+        while [ "$i" -lt 20 ] && fm_pid_alive "$child"; do
+          sleep 0.1
+          i=$((i + 1))
+        done
+        if fm_pid_alive "$child"; then
+          kill -KILL "$child" 2>/dev/null || true
+        fi
+      fi
+      wait "$child" 2>/dev/null || true
+      child_done=1
+    fi
     report_healthy
     rm -f "$child_out" "$child_pid_file" 2>/dev/null || true
     exit 0
