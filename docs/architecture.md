@@ -122,6 +122,7 @@ The live signal is a `state/<id>.meta` record with `kind=secondmate`; `data/seco
 A tracked-files fast-forward leaves the home's gitignored `data/`, `state/`, `config/`, `projects/`, and `.no-mistakes/` directories untouched.
 The locked session-start bootstrap step separately propagates the primary's declared inheritable local config, currently `config/crew-dispatch.json`, `config/crew-harness`, and `config/backlog-backend`, into each validated live secondmate home so that secondmate's own crewmates, dispatch profiles, and backlog backend use the primary settings.
 That propagation is primary-authoritative, re-runs even when tracked files were already current, mirrors absence when the primary clears the value, and deliberately never copies `config/secondmate-harness`.
+On native Windows, the propagation guard normalizes drive-letter path forms before checking whether the destination item is gitignored, so same-store worktree homes inherit config without weakening the refusal for tracked destinations.
 Dirty, diverged, unsafe, or in-flight homes are reported and left unchanged by the tracked-file sync.
 Only a running secondmate home that actually advanced and changed `AGENTS.md`, `bin/`, or `.agents/skills/` is listed for a re-read nudge.
 Changes under public `skills/` fast-forward like other tracked files, but they are not part of the running firstmate instruction surface.

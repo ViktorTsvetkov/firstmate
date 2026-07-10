@@ -24,6 +24,15 @@
 # is deliberately NOT in the list: it is the primary's own setting for launching
 # secondmates, and a secondmate never spawns secondmates, so it must not flow
 # downstream.
+#
+# On native Windows, destination git checks may return the destination parent and
+# repo top in different drive-letter path forms.
+# The destination guard normalizes both to POSIX form before deriving the
+# repo-relative path, so same-store worktree homes can inherit gitignored config
+# while non-gitignored destinations are still refused.
+
+# shellcheck source=bin/fm-platform-lib.sh disable=SC1091
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fm-platform-lib.sh"
 
 # The declared inheritable set (space-separated, config-dir-relative item paths).
 # Extend here to inherit more of the primary's local config; override via the
@@ -54,6 +63,27 @@ copy_inheritable_file() {
   return 1
 }
 
+config_inherit_windows_posix_path() {
+  local path=$1 drive rest
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$path" 2>/dev/null && return 0
+  fi
+  case "$path" in
+    [A-Za-z]:/*)
+      drive=$(printf '%s' "${path%%:*}" | tr '[:upper:]' '[:lower:]')
+      rest=${path#?:/}
+      printf '/%s/%s\n' "$drive" "$rest"
+      ;;
+    [A-Za-z]:\\*)
+      drive=$(printf '%s' "${path%%:*}" | tr '[:upper:]' '[:lower:]')
+      rest=${path#?:\\}
+      rest=${rest//\\//}
+      printf '/%s/%s\n' "$drive" "$rest"
+      ;;
+    *) printf '%s\n' "$path" ;;
+  esac
+}
+
 destination_allows_inherited_item() {
   local dest_config=$1 item=$2 dest_parent dest_name dest_parent_abs top dest_path rel_path
   dest_parent=${dest_config%/*}
@@ -64,6 +94,10 @@ destination_allows_inherited_item() {
     return 0
   fi
   top=$(git -C "$dest_parent_abs" rev-parse --show-toplevel 2>/dev/null) || return 1
+  if fm_platform_is_windows; then
+    dest_parent_abs=$(config_inherit_windows_posix_path "$dest_parent_abs") || return 1
+    top=$(config_inherit_windows_posix_path "$top") || return 1
+  fi
   dest_path="$dest_parent_abs/$dest_name/$item"
   case "$dest_path" in
     "$top"/*) rel_path=${dest_path#"$top"/} ;;

@@ -100,6 +100,7 @@ tests/fm-spawn-dispatch-profile.test.sh   # concrete dispatch profile flags: act
 tests/fm-update.test.sh                   # fast-forward-only self-update, reread, nudge, dedup, and skip-safety tests
 tests/fm-secondmate-sync.test.sh          # local-HEAD secondmate sync, no-fetch, bootstrap nudge gating, and spawn hook tests
 tests/fm-secondmate-harness.test.sh       # secondmate-vs-crewmate harness resolution, optional secondmate model/effort pins, primary-to-secondmate config inheritance, and config-push tests
+tests/fm-config-inherit.test.sh           # config inheritance destination guard tests, including native-Windows same-store worktree path normalization
 tests/fm-secondmate-lifecycle-e2e.test.sh # persistent secondmate routing, seeding, backlog handoff, spawn, recovery, teardown, and FM_HOME flow tests
 tests/fm-secondmate-safety.test.sh        # secondmate home safety, idle charter, handoff validation, teardown boundary, and child-cleanup fail-closed tests
 tests/fm-home-seed-windows-path.test.sh   # native-Windows treehouse lease path normalization, active-home containment, and post-lease return tests
