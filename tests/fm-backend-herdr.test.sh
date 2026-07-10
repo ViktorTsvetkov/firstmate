@@ -4,8 +4,9 @@
 # data/fm-backend-design-d7 (herdr-addendum.md). Mirrors tests/fm-backend.test.sh's
 # fakebin/command-log convention, but herdr has no pre-refactor baseline to
 # diff against (it is new in this task), so these are direct behavior
-# assertions against a small, LOG-based, canned-response fake `herdr` + real
-# `jq` (jq itself is a real required tool for this backend, not faked).
+# assertions against a small, LOG-based, canned-response fake `herdr`, a
+# stateful fake for server/container flows, and real `jq` (jq itself is a real
+# required tool for this backend, not faked).
 # The real-binary smoke test lives in tests/fm-backend-herdr-smoke.test.sh,
 # gated on the herdr binary actually being installed.
 set -u
@@ -124,15 +125,16 @@ wait_for_log_contains() {  # <log> <pattern>
 }
 
 # make_herdr_statefake: a STATEFUL `herdr` stub that models the parts of herdr's
-# real container behavior the workspace-leak fix (and the default-tab-prune
-# safety fix) depend on, so a full spawn->teardown cycle can be replayed
-# repeatedly and the "one persistent firstmate workspace, no orphans"
+# real server/container behavior the server-start, workspace-leak, and
+# default-tab-prune safety tests depend on, so a full spawn->teardown cycle can
+# be replayed repeatedly and the "one persistent firstmate workspace, no orphans"
 # invariant asserted end to end (the canned, call-numbered make_herdr_fakebin
 # above cannot model state carried ACROSS calls). Backed by a JSON state file
 # ($FM_FAKE_HERDR_STATE) mutated with real jq. Modeled behaviors, all
-# verified real-herdr facts recorded in docs/herdr-backend.md: `workspace
-# create` seeds the new workspace with one auto-created default tab (label
-# "1") and returns that tab's tab_id/pane_id in the SAME response
+# verified real-herdr facts recorded in docs/herdr-backend.md: `status --json`
+# reports whether the session server is running; `server` marks it running;
+# `workspace create` seeds the new workspace with one auto-created default tab
+# (label "1") and returns that tab's tab_id/pane_id in the SAME response
 # (`.result.tab.tab_id` / `.result.root_pane.pane_id`, verified empirically
 # against the real binary); `pane close` removes the pane's single-pane tab
 # (closing a tab's only pane closes the tab); `workspace list` / `tab list` /
@@ -145,7 +147,7 @@ wait_for_log_contains() {  # <log> <pattern>
 make_herdr_statefake() {  # <dir> -> echoes fakebin dir; seeds an empty state file
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
-  printf '{"next":1,"workspaces":[],"tabs":[],"agent_status":{}}\n' > "$dir/state.json"
+  printf '{"server_running":true,"next":1,"workspaces":[],"tabs":[],"agent_status":{}}\n' > "$dir/state.json"
   cat > "$fb/herdr" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -172,7 +174,11 @@ done
 
 case "$cmd $sub" in
   "status --json")
-    printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n'
+    running=$(jq_state -r 'if has("server_running") then .server_running else true end')
+    printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":%s}}\n' "$running"
+    ;;
+  "server "*)
+    jq_state '.server_running = true' | save
     ;;
   "workspace list")
     jq_state '{result:{workspaces:.workspaces}}'
@@ -233,6 +239,11 @@ SH
 fake_herdr_set_agent_status() {  # <state-file> <pane_id> <status>
   local state=$1 pane=$2 status=$3 tmp="$1.tmp.$$"
   jq --arg p "$pane" --arg s "$status" '.agent_status[$p] = $s' "$state" > "$tmp" && mv "$tmp" "$state"
+}
+
+fake_herdr_set_server_running() {  # <state-file> <true|false>
+  local state=$1 running=$2 tmp="$1.tmp.$$"
+  jq --argjson running "$running" '.server_running = $running' "$state" > "$tmp" && mv "$tmp" "$state"
 }
 
 # herdr_case <name> -> sets up FM_HERDR_LOG/FM_HERDR_RESPONSES/fb for one test,
@@ -434,29 +445,18 @@ test_posix_server_ensure_accepts_plain_running_status() {
 # --- container_ensure / create_task ------------------------------------------
 
 test_container_ensure_starts_server_and_workspace() {
-  local dir log resp fb out
-  dir="$TMP_ROOT/container"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  # 1: version_check status --json (server not running yet, irrelevant to client check)
-  printf '{"client":{"version":"0.7.1","protocol":14}}\n' > "$resp/1.out"
-  # 2: server_ensure's status --json check -> not running
-  printf '{"server":{"running":false}}\n' > "$resp/2.out"
-  # 3/4: `herdr server` is backgrounded, so it can race with the first poll in
-  # the canned fake's global call counter. Make either order see "running".
-  printf '{"server":{"running":true}}\n' > "$resp/3.out"
-  # 4: server_ensure poll -> now running, if the background launch consumed 3
-  printf '{"server":{"running":true}}\n' > "$resp/4.out"
-  # 5: workspace list -> empty (no "firstmate" workspace yet)
-  printf '{"result":{"workspaces":[]}}\n' > "$resp/5.out"
-  # 6: workspace create -> w1, seeding default tab w1:t9 (real herdr returns
-  # the seeded tab/pane ids in the SAME response - verified empirically).
-  printf '{"result":{"workspace":{"workspace_id":"w1","label":"firstmate"},"tab":{"tab_id":"w1:t9"},"root_pane":{"pane_id":"w1:p9"}}}\n' > "$resp/6.out"
-  fb=$(make_herdr_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 HERDR_SESSION=fmtest \
+  local dir log state fb out
+  dir="$TMP_ROOT/container"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
+  fb=$(make_herdr_statefake "$dir")
+  fake_herdr_set_server_running "$state" false
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" HERDR_SESSION=fmtest \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /tmp' "$ROOT" )
-  [ "$out" = $'fmtest:w1\tw1:t9' ] || fail "container_ensure should echo '<session>:<workspace_id>\\t<seeded_default_tab_id>', got '$out'"
+  [ "$out" = $'fmtest:w1\tw1:t2' ] || fail "container_ensure should echo '<session>:<workspace_id>\\t<seeded_default_tab_id>', got '$out'"
   assert_contains "$(cat "$log")" "HERDR_SESSION=fmtest"$'\x1f''server' "container_ensure did not start the herdr server"
   assert_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''create'$'\x1f''--cwd'$'\x1f''/tmp'$'\x1f''--label'$'\x1f''firstmate' \
     "container_ensure did not create the firstmate workspace with the given cwd"
+  [ "$(jq -r '.server_running' "$state")" = true ] || fail "container_ensure did not leave the fake server running"
+  [ "$(jq -r '.workspaces | length' "$state")" = 1 ] || fail "container_ensure did not create exactly one workspace: $(jq -c '.workspaces' "$state")"
   pass "fm_backend_herdr_container_ensure: version-gates, starts the server, ensures the firstmate workspace, echoes session:workspace_id + the seeded default tab id"
 }
 
