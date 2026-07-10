@@ -71,6 +71,7 @@ This is secondmate-only: crewmate/scout model resolution is untouched by this fi
 Before launch, `fm-spawn.sh --secondmate` locally fast-forwards the home to the primary firstmate checkout's current default-branch commit when it is safe; dirty, diverged, or in-flight homes launch unchanged with a warning.
 The same launch also propagates the primary's declared inheritable local config, currently `config/crew-dispatch.json`, `config/crew-harness`, and `config/backlog-backend`, into the secondmate home's `config/`.
 `config/secondmate-harness` is not inherited because it is only the primary's knob for launching secondmate agents.
+On native Windows, the propagation helper normalizes drive-letter path forms before checking the destination gitignore rule, so same-store worktree homes can inherit config without allowing tracked config writes.
 For already-live secondmates, use `bin/fm-config-push.sh` to push a mid-session inherited-config change without running the tracked-file fast-forward or nudging the agents.
 It uses the same live-home discovery and propagation helper as bootstrap and reports each item as `pushed`, `unchanged`, `skipped`, or `error`.
 `bin/fm-home-seed.sh` refuses to copy a missing or placeholder charter.

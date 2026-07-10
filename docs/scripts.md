@@ -38,7 +38,7 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-git-identity-lib.sh` | Shared git common-directory identity checks for treehouse leases and spawn-time worktree validation                |
 | `fm-supervision-lib.sh`  | Shared grace-based "in-flight work exists but no watcher has a fresh beacon" status and predicate used by `fm-guard.sh`; `fm-turnend-guard.sh` uses it for banner fields and relies on `fm-wake-lib.sh` for live watcher lock health |
 | `fm-ff-lib.sh`           | Shared guarded fast-forward helper for `/updatefirstmate` origin pulls and no-fetch local secondmate syncs         |
-| `fm-config-inherit-lib.sh` | Shared primary->secondmate inheritable-config propagation (a declared, extensible item list - currently `config/crew-dispatch.json`, `config/crew-harness`, and `config/backlog-backend`) sourced by spawn, bootstrap, and config push |
+| `fm-config-inherit-lib.sh` | Shared primary->secondmate inheritable-config propagation (a declared, extensible item list - currently `config/crew-dispatch.json`, `config/crew-harness`, and `config/backlog-backend`) sourced by spawn, bootstrap, and config push; normalizes native-Windows path forms before the gitignore destination guard |
 | `fm-tasks-axi-lib.sh`    | Shared backlog-backend selector and `tasks-axi` compatibility probe sourced by bootstrap and teardown              |
 | `fm-wake-drain.sh`       | Atomically drain queued watcher wakes before handling supervision work, then run the watcher-liveness guard         |
 | `fm-wake-lib.sh`         | Shared durable wake queue, portable lock helpers, path-age helpers, and watcher identity/health helpers sourced by the watcher, drain, arm, guard, turn-end guard, daemon, and teardown |

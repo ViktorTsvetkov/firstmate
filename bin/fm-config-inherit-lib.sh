@@ -24,6 +24,12 @@
 # is deliberately NOT in the list: it is the primary's own setting for launching
 # secondmates, and a secondmate never spawns secondmates, so it must not flow
 # downstream.
+#
+# On native Windows, destination git checks may return the destination parent and
+# repo top in different drive-letter path forms.
+# The destination guard normalizes both to POSIX form before deriving the
+# repo-relative path, so same-store worktree homes can inherit gitignored config
+# while non-gitignored destinations are still refused.
 
 # shellcheck source=bin/fm-platform-lib.sh disable=SC1091
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fm-platform-lib.sh"
