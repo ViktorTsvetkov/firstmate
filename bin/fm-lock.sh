@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Acquire or inspect the per-home firstmate session lock.
-# Writes the harness (agent) process PID found by walking the shell's ancestry.
+# Writes the harness process PID found by walking the shell's ancestry.
 # On native Windows under herdr, where Git Bash tool commands run detached from
-# the durable pane agent, records the herdr pane-agent identity instead.
+# the durable pane agent, records the herdr session, pane, terminal identity.
 # Usage: fm-lock.sh           acquire; exit 1 if another live session holds it
 #        fm-lock.sh status    print holder and liveness; always exits 0
 set -u
