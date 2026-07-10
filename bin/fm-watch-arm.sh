@@ -91,6 +91,36 @@ print_watch_output() {
   [ -s "$out" ] && cat "$out"
 }
 
+watch_output_has_already_running() {
+  local out=$1
+  grep -Eq '^watcher: already running( pid [0-9]+)?$' "$out" 2>/dev/null
+}
+
+wait_windows_recorded_watcher() {
+  local recorded_pid=$1 rc=0
+  echo "watcher: started pid=$recorded_pid (beacon fresh)"
+  while healthy_watcher && [ "$HEALTHY_PID" = "$recorded_pid" ]; do
+    if [ "$child_done" -eq 0 ] && ! fm_pid_alive "$child"; then
+      wait "$child"
+      rc=$?
+      child_done=1
+      if [ "$rc" -eq 0 ] && watch_output_has_wake "$child_out"; then
+        print_watch_output "$child_out"
+        rm -f "$child_out" 2>/dev/null || true
+        exit 0
+      fi
+    fi
+    sleep 0.2
+  done
+  if [ "$child_done" -eq 0 ]; then
+    wait "$child"
+    rc=$?
+  fi
+  print_watch_output "$child_out"
+  rm -f "$child_out" 2>/dev/null || true
+  exit "$rc"
+}
+
 mode=arm
 case "${1:-}" in
   ''|arm|--arm) mode=arm ;;
@@ -134,7 +164,11 @@ child=
 child_out=
 cleanup_child() {
   if [ -n "$child" ] && fm_pid_alive "$child"; then
-    kill -TERM "$child" 2>/dev/null || true
+    if fm_platform_is_windows; then
+      healthy_watcher || kill -TERM "$child" 2>/dev/null || true
+    else
+      kill -TERM "$child" 2>/dev/null || true
+    fi
   fi
   if [ -n "$child_out" ]; then
     rm -f "$child_out" 2>/dev/null || true
@@ -164,6 +198,12 @@ while :; do
       print_watch_output "$child_out"
       rm -f "$child_out" 2>/dev/null || true
       exit "$rc"
+    fi
+    if fm_platform_is_windows \
+      && [ "$child_done" -eq 0 ] \
+      && fm_pid_alive "$child" \
+      && ! watch_output_has_already_running "$child_out"; then
+      wait_windows_recorded_watcher "$HEALTHY_PID"
     fi
     # Another watcher won the singleton; our child stood down. Report the live one.
     report_healthy
