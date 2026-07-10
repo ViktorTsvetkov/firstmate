@@ -14,6 +14,9 @@
 # injects ONLY when the durable away-mode flag state/.afk is present. Invoking
 # the /afk skill sets that flag and starts this daemon; any real (unmarked)
 # user message clears it and firstmate resumes full responsiveness.
+# On native Windows with herdr, the daemon also checks this flag on every
+# housekeeping loop tick and shuts down promptly once it has been cleared, even
+# when no wake reaches the injection path.
 # When afk is off, normal fm-watch.sh always-on triage is the active mechanism.
 # Any buffered daemon escalations that remain while afk is off survive in
 # state/.subsuper-escalations and are flushed on the next "while you were out"
@@ -59,8 +62,13 @@
 #          FM_SUPERVISOR_TARGET     supervisor pane target (override; otherwise
 #                                   auto-discovered per backend - $TMUX_PANE
 #                                   under tmux, "<session>:<pane-id>" from
-#                                   $HERDR_PANE_ID under herdr - then
-#                                   firstmate:0 fallback). Accepts either a
+#                                   $HERDR_PANE_ID under herdr, then the live
+#                                   native-Windows/herdr session-lock pane when
+#                                   available, then firstmate:0 fallback).
+#                                   A stale override is ignored only on
+#                                   native-Windows/herdr when a live
+#                                   auto-discovered fallback resolves.
+#                                   Accepts either a
 #                                   tmux target or a herdr "<session>:<pane-id>"
 #                                   target; which one it's read as is decided by
 #                                   FM_SUPERVISOR_BACKEND (below), independently.
@@ -69,8 +77,10 @@
 #                                   way bin/fm-backend.sh's fm_backend_detect
 #                                   resolves the runtime firstmate itself is
 #                                   executing inside - $TMUX_PANE selects tmux,
-#                                   $HERDR_ENV=1 selects herdr - falling back to
-#                                   tmux). zellij, orca, and cmux are not yet
+#                                   $HERDR_ENV=1 selects herdr, then the live
+#                                   native-Windows/herdr session lock selects
+#                                   herdr, falling back to tmux).
+#                                   zellij, orca, and cmux are not yet
 #                                   supported as supervisor backends; the daemon
 #                                   refuses loudly at startup rather than trying
 #                                   tmux primitives against a non-tmux pane.
