@@ -694,6 +694,9 @@ fm_backend_herdr_send_text_line() {  # <target> <text>
 # caller sends Enter separately. Mirrors tmux's `send-keys -t T -l text`.
 # Verified: `pane send-text` does NOT auto-submit (contrary to the addendum's
 # original guess); it behaves exactly like tmux's `-l` literal send.
+# On native Windows Git Bash, disable MSYS path conversion around the native
+# herdr call so leading-slash skill payloads (for example `/no-mistakes`) are
+# not rewritten before herdr receives them.
 fm_backend_herdr_send_literal() {  # <target> <text>
   fm_backend_herdr_target_ready "$1" || return 1
   if fm_platform_is_windows; then
@@ -719,6 +722,9 @@ fm_backend_herdr_normalize_key() {  # <key>
 
 # fm_backend_herdr_send_key: one named special key. Mirrors fm-send.sh's --key
 # path (tmux's `send-keys -t T key`).
+# The native-Windows MSYS path-conversion guard matches send_literal so the
+# Enter that submits a leading-slash payload travels through the same literal
+# channel.
 fm_backend_herdr_send_key() {  # <target> <key>
   fm_backend_herdr_target_ready "$1" || return 1
   local key
