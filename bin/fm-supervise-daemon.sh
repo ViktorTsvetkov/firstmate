@@ -277,7 +277,11 @@ _collapse_newlines() {  # <text>
 source_fm_lock_lib() {
   declare -F holder_alive >/dev/null 2>&1 && return 0
   local old=${FM_LOCK_LIB_ONLY-} had_old=0
+  local old_state=${STATE-} had_state=0
+  local old_lock=${LOCK-} had_lock=0
   [ "${FM_LOCK_LIB_ONLY+x}" = x ] && had_old=1
+  [ "${STATE+x}" = x ] && had_state=1
+  [ "${LOCK+x}" = x ] && had_lock=1
   FM_LOCK_LIB_ONLY=1
   # shellcheck source=bin/fm-lock.sh
   . "$FM_DAEMON_DIR/fm-lock.sh"
@@ -285,6 +289,16 @@ source_fm_lock_lib() {
     FM_LOCK_LIB_ONLY=$old
   else
     unset FM_LOCK_LIB_ONLY
+  fi
+  if [ "$had_state" -eq 1 ]; then
+    STATE=$old_state
+  else
+    unset STATE
+  fi
+  if [ "$had_lock" -eq 1 ]; then
+    LOCK=$old_lock
+  else
+    unset LOCK
   fi
 }
 

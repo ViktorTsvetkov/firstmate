@@ -880,6 +880,25 @@ test_discover_supervisor_backend_ignores_stale_herdr_session_lock() {
   pass "discover_supervisor_backend: stale Windows/herdr session-lock owner is ignored"
 }
 
+test_source_fm_lock_lib_preserves_daemon_lock_variable() {
+  local dir state daemon_lock out_file
+  dir=$(make_supercase source-lock-lib-preserve)
+  state="$dir/state"
+  daemon_lock="$state/.supervise-daemon.lock"
+  out_file="$dir/source.out"
+  (
+    unset -f holder_alive
+    local STATE="$state"
+    local LOCK="$daemon_lock"
+    FM_STATE_OVERRIDE="$state" source_fm_lock_lib > "$out_file"
+    [ ! -s "$out_file" ] || fail "source_fm_lock_lib wrote unexpected output: $(cat "$out_file")"
+    declare -F holder_alive >/dev/null 2>&1 || fail "source_fm_lock_lib did not load holder_alive"
+    [ "$STATE" = "$state" ] || fail "source_fm_lock_lib clobbered STATE: $STATE"
+    [ "$LOCK" = "$daemon_lock" ] || fail "source_fm_lock_lib clobbered daemon LOCK: $LOCK"
+  ) || fail "source_fm_lock_lib preserve subshell failed"
+  pass "source_fm_lock_lib preserves caller-owned daemon lock variables"
+}
+
 test_discover_supervisor_target_herdr() {
   local out
   out=$(FM_SUPERVISOR_TARGET=explicit:target TMUX_PANE='' HERDR_ENV=1 HERDR_PANE_ID=w1:p9 discover_supervisor_target)
@@ -1221,6 +1240,7 @@ test_fm_send_exits_nonzero_on_initial_send_failure
 test_discover_supervisor_backend_precedence
 test_discover_supervisor_backend_herdr_session_lock
 test_discover_supervisor_backend_ignores_stale_herdr_session_lock
+test_source_fm_lock_lib_preserves_daemon_lock_variable
 test_discover_supervisor_target_herdr
 test_discover_supervisor_target_herdr_session_lock
 test_discover_supervisor_target_ignores_stale_herdr_session_lock
