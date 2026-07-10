@@ -75,6 +75,7 @@ jobs:
             tests/fm-bootstrap.test.sh
             tests/fm-brief.test.sh
             tests/fm-composer-ghost.test.sh
+            tests/fm-config-inherit.test.sh
             tests/fm-crew-state.test.sh
             tests/fm-daemon.test.sh
             tests/fm-fleet-sync.test.sh
