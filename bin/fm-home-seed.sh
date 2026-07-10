@@ -22,8 +22,10 @@
 #       generated briefs, new homes, new project clones, and registry edits are
 #       rolled back. Treehouse-acquired homes are normalized on native Windows
 #       before safety checks, and returned on any post-lease failure when the
-#       rollback target is safe and still a git worktree; a failed return warns
-#       because the lease may still be held.
+#       rollback target is safe and still a git worktree. On native Windows, a
+#       different-store lease refusal also points standalone active homes at the
+#       explicit-home path form; a failed return warns because the lease may
+#       still be held.
 #       Set FM_SECONDMATE_CHARTER='<charter>' to seed from inline charter text
 #       when no filled charter brief exists. Set FM_SECONDMATE_SCOPE='<scope>'
 #       to override the registry routing scope. Otherwise the registry summary
@@ -524,7 +526,11 @@ acquire_treehouse_home() {
     home=$(resolved_path "$home")
   fi
   git_common_dir_matches "$FM_ROOT" "$home" || {
-    echo "error: treehouse get --lease yielded a firstmate home backed by a different git store: $home" >&2
+    if fm_platform_is_windows; then
+      echo "error: treehouse get --lease yielded a firstmate home backed by a different git store: $home; the active firstmate home is not the treehouse pool's backing store (commonly: it is a standalone clone). Provision with an explicit home path instead: fm-home-seed.sh <id> <home-path> <project>..." >&2
+    else
+      echo "error: treehouse get --lease yielded a firstmate home backed by a different git store: $home" >&2
+    fi
     seed_return_treehouse_home "$home"
     return 1
   }
