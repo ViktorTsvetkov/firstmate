@@ -508,7 +508,11 @@ acquire_treehouse_home() {
     home=$(resolved_path "$home")
   fi
   fm_git_common_dir_matches "$FM_ROOT" "$home" || {
-    echo "error: treehouse get --lease yielded a firstmate home backed by a different git store: $home" >&2
+    if fm_platform_is_windows; then
+      echo "error: treehouse get --lease yielded a firstmate home backed by a different git store: $home; the active firstmate home is not the treehouse pool's backing store (commonly: it is a standalone clone). Provision with an explicit home path instead: fm-home-seed.sh <id> <home-path> <project>..." >&2
+    else
+      echo "error: treehouse get --lease yielded a firstmate home backed by a different git store: $home" >&2
+    fi
     seed_return_treehouse_home "$home"
     return 1
   }
