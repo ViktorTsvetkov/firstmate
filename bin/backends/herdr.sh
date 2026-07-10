@@ -696,7 +696,11 @@ fm_backend_herdr_send_text_line() {  # <target> <text>
 # original guess); it behaves exactly like tmux's `-l` literal send.
 fm_backend_herdr_send_literal() {  # <target> <text>
   fm_backend_herdr_target_ready "$1" || return 1
-  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-text "$FM_BACKEND_HERDR_PANE" "$2" >/dev/null 2>&1
+  if fm_platform_is_windows; then
+    MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-text "$FM_BACKEND_HERDR_PANE" "$2" >/dev/null 2>&1
+  else
+    fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-text "$FM_BACKEND_HERDR_PANE" "$2" >/dev/null 2>&1
+  fi
 }
 
 # fm_backend_herdr_normalize_key: map firstmate's key vocabulary (Enter,
@@ -719,7 +723,11 @@ fm_backend_herdr_send_key() {  # <target> <key>
   fm_backend_herdr_target_ready "$1" || return 1
   local key
   key=$(fm_backend_herdr_normalize_key "$2")
-  fm_backend_herdr_cli_leading_session "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" "$key" >/dev/null 2>&1
+  if fm_platform_is_windows; then
+    MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' fm_backend_herdr_cli_leading_session "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" "$key" >/dev/null 2>&1
+  else
+    fm_backend_herdr_cli_leading_session "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" "$key" >/dev/null 2>&1
+  fi
 }
 
 # fm_backend_herdr_capture: bounded plain-text pane capture. Mirrors

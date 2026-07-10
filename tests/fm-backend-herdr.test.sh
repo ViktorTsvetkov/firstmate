@@ -45,6 +45,7 @@ next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
 {
   printf 'HERDR_SESSION=%s' "${HERDR_SESSION:-}"
   for a in "$@"; do printf '\x1f%s' "$a"; done
+  printf '\x1fMSYS_NO_PATHCONV=%s\x1fMSYS2_ARG_CONV_EXCL=%s' "${MSYS_NO_PATHCONV:-}" "${MSYS2_ARG_CONV_EXCL:-}"
   printf '\n'
 } >> "$LOG"
 if [ "${1:-}" = status ] && [ "${2:-}" = --json ] && [ "${FM_HERDR_SCRIPT_STATUS:-0}" != 1 ]; then
@@ -1134,6 +1135,47 @@ test_send_key_normalizes_and_targets_pane() {
   pass "fm_backend_herdr_send_key: normalizes the key, targets the right pane, and uses a leading session selector"
 }
 
+test_windows_send_literal_disables_msys_path_conversion() {
+  local dir log resp fb text_log
+  dir="$TMP_ROOT/sendliteral-pathconv-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_literal default:w1:p2 "/no-mistakes"' "$ROOT"
+  expect_code 0 $? "Windows send_literal should succeed"
+  text_log=$(grep $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2' "$log")
+  assert_contains "$text_log" $'\x1f''/no-mistakes' "Windows send_literal should pass the leading-slash payload literally to herdr"
+  assert_contains "$text_log" $'\x1f''MSYS_NO_PATHCONV=1'$'\x1f''MSYS2_ARG_CONV_EXCL=*' \
+    "Windows send_literal must disable MSYS path conversion around the native herdr send-text call"
+  pass "fm_backend_herdr_send_literal: Windows branch disables MSYS path conversion for leading-slash text"
+}
+
+test_posix_send_literal_does_not_set_msys_path_conversion_env() {
+  local dir log resp fb text_log
+  dir="$TMP_ROOT/sendliteral-pathconv-posix"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_literal default:w1:p2 "/no-mistakes"' "$ROOT"
+  expect_code 0 $? "POSIX send_literal should succeed"
+  text_log=$(grep $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2' "$log")
+  assert_contains "$text_log" $'\x1f''/no-mistakes' "POSIX send_literal should keep the same literal payload"
+  assert_contains "$text_log" $'\x1f''MSYS_NO_PATHCONV='$'\x1f''MSYS2_ARG_CONV_EXCL=' \
+    "POSIX send_literal must not set the MSYS path-conversion guard variables"
+  pass "fm_backend_herdr_send_literal: POSIX branch leaves the MSYS path-conversion env unset"
+}
+
+test_windows_send_key_disables_msys_path_conversion() {
+  local dir log resp fb key_log
+  dir="$TMP_ROOT/sendkey-pathconv-windows"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_key default:w1:p2 Enter' "$ROOT"
+  expect_code 0 $? "Windows send_key should succeed"
+  key_log=$(grep $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2' "$log")
+  assert_contains "$key_log" $'\x1f''MSYS_NO_PATHCONV=1'$'\x1f''MSYS2_ARG_CONV_EXCL=*' \
+    "Windows send_key must disable MSYS path conversion around the native herdr send-keys call"
+  pass "fm_backend_herdr_send_key: Windows branch disables MSYS path conversion for key sends"
+}
+
 test_kill_is_best_effort() {
   local dir log resp fb
   dir="$TMP_ROOT/kill"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -2046,6 +2088,9 @@ test_capture_preserves_pane_read_failure
 test_windows_capture_strips_cr_from_crlf_pane_read
 test_posix_capture_preserves_cr_byte_identical
 test_send_key_normalizes_and_targets_pane
+test_windows_send_literal_disables_msys_path_conversion
+test_posix_send_literal_does_not_set_msys_path_conversion_env
+test_windows_send_key_disables_msys_path_conversion
 test_kill_is_best_effort
 test_current_path_reads_cwd
 test_windows_current_path_normalizes_foreground_cwd_to_posix
