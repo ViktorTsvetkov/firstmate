@@ -4,8 +4,9 @@
 # data/fm-backend-design-d7 (herdr-addendum.md). Mirrors tests/fm-backend.test.sh's
 # fakebin/command-log convention, but herdr has no pre-refactor baseline to
 # diff against (it is new in this task), so these are direct behavior
-# assertions against a small, LOG-based, canned-response fake `herdr` + real
-# `jq` (jq itself is a real required tool for this backend, not faked).
+# assertions against a small, LOG-based, canned-response fake `herdr`, a
+# stateful fake for server/container flows, and real `jq` (jq itself is a real
+# required tool for this backend, not faked).
 # The real-binary smoke test lives in tests/fm-backend-herdr-smoke.test.sh,
 # gated on the herdr binary actually being installed.
 set -u
@@ -124,9 +125,9 @@ wait_for_log_contains() {  # <log> <pattern>
 }
 
 # make_herdr_statefake: a STATEFUL `herdr` stub that models the parts of herdr's
-# real server/container behavior the workspace-leak fix (and the default-tab-prune
-# safety fix) depend on, so a full spawn->teardown cycle can be replayed
-# repeatedly and the "one persistent firstmate workspace, no orphans"
+# real server/container behavior the server-start, workspace-leak, and
+# default-tab-prune safety tests depend on, so a full spawn->teardown cycle can
+# be replayed repeatedly and the "one persistent firstmate workspace, no orphans"
 # invariant asserted end to end (the canned, call-numbered make_herdr_fakebin
 # above cannot model state carried ACROSS calls). Backed by a JSON state file
 # ($FM_FAKE_HERDR_STATE) mutated with real jq. Modeled behaviors, all
