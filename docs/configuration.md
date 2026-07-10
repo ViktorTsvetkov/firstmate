@@ -101,6 +101,7 @@ The main first mate routes by reading those scopes with judgment; the project li
 Use `fm-home-seed.sh <id> - <project>...` to lease a fresh firstmate worktree for the secondmate home.
 The lease is held under the secondmate id until explicit retirement or seed rollback returns it, so normal restarts do not free or recycle the home.
 The leased home must be a git worktree backed by the same git common directory as the active firstmate checkout; a mismatched lease is refused and returned.
+On native Windows, that refusal also explains the common standalone-active-home cause and points at the explicit-home path form: `fm-home-seed.sh <id> <home-path> <project>...`.
 On native Windows, drive-letter paths returned by `treehouse get --lease` are normalized before active-home containment checks and before the route is recorded.
 Any post-lease validation failure returns the acquired lease when the rollback target is still safe and still a git worktree.
 Teardown of a leased home fails closed if `treehouse return` cannot release the lease; plain-clone homes with no treehouse pool slot are removed directly.

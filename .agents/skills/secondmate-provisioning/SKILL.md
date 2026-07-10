@@ -53,6 +53,7 @@ The slot stays reserved across restarts until the lease is released.
 Release happens only on explicit retirement or seed rollback, never on routine restart or recovery.
 `bin/fm-home-seed.sh` accepts a treehouse-leased home only when it is a git worktree backed by the same git common directory as the active firstmate checkout.
 If the lease comes from another backing store, seeding refuses it and returns the lease.
+On native Windows, that refusal also explains the common standalone-active-home cause and points at the explicit-home path form: `bin/fm-home-seed.sh <id> <home-path> <project>...`.
 On native Windows, `fm-home-seed.sh` normalizes a drive-letter treehouse lease path before the active-home safety check and before recording the home, so a valid external lease is not misread as inside the active home.
 Any post-lease validation failure returns the acquired lease when the rollback target is still safe and is still a git worktree.
 

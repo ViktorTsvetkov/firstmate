@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Focused Windows-path coverage for fm-home-seed's treehouse-leased homes.
+# Focused Windows-path and different-store coverage for fm-home-seed's treehouse-leased homes.
 set -u
 
 # shellcheck source=tests/secondmate-helpers.sh
