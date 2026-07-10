@@ -35,6 +35,7 @@ batched digest rather than per-wake injections.
    the harness lifecycle and survived the real incident reproduction.
    The daemon is **presence-gated**: it injects escalations only while
    `state/.afk` exists, and stays quiet otherwise.
+   On native Windows with herdr, it also checks for a cleared flag on every housekeeping tick so it can exit promptly even when no wake reaches the injection path.
 
 3. **Do not separately arm `fm-watch.sh`.** The daemon manages the watcher as
    its child; the singleton lock no-ops a stray arm harmlessly.
@@ -206,16 +207,17 @@ the marker lets firstmate distinguish it from a real captain message.
   (tmux vs herdr) and TARGET independently, mirroring
   `bin/fm-backend.sh`'s own runtime auto-detection. Backend: `FM_SUPERVISOR_BACKEND`
   override, then `$TMUX_PANE` set (tmux), then `$HERDR_ENV=1` with
-  `$HERDR_PANE_ID` present (herdr), then a tmux fallback. Target:
+  `$HERDR_PANE_ID` present (herdr), then a live native-Windows/herdr session-lock owner, then a tmux fallback. Target:
   `FM_SUPERVISOR_TARGET` override (a tmux target or a herdr
   `"<session>:<pane-id>"` target), then `$TMUX_PANE`, then
-  `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"` under herdr, then a
+  `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"` under herdr, then a live native-Windows/herdr session-lock pane, then a
   `firstmate:0` fallback with a warning. Both resolution sources are logged at
   startup so a wrong-but-resolving fallback is detectable. Other runtime
   backends, including zellij, orca, and cmux, are not yet supported as
   supervisor backends; the daemon refuses loudly at startup instead of
   misapplying tmux primitives to a pane that isn't one
   (docs/herdr-backend.md "Away-mode daemon: herdr supervisor-pane support").
+  On native Windows with herdr only, a stale explicit `FM_SUPERVISOR_TARGET` is validated and ignored when one of those auto-discovered fallback targets is live; POSIX and tmux explicit-target refusal behavior is unchanged.
 
 ## Reliability properties
 

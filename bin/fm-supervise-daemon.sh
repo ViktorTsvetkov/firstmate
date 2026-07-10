@@ -14,6 +14,9 @@
 # injects ONLY when the durable away-mode flag state/.afk is present. Invoking
 # the /afk skill sets that flag and starts this daemon; any real (unmarked)
 # user message clears it and firstmate resumes full responsiveness.
+# On native Windows with herdr, the daemon also checks this flag on every
+# housekeeping loop tick and shuts down promptly once it has been cleared, even
+# when no wake reaches the injection path.
 # When afk is off, normal fm-watch.sh always-on triage is the active mechanism.
 # Any buffered daemon escalations that remain while afk is off survive in
 # state/.subsuper-escalations and are flushed on the next "while you were out"
@@ -59,8 +62,13 @@
 #          FM_SUPERVISOR_TARGET     supervisor pane target (override; otherwise
 #                                   auto-discovered per backend - $TMUX_PANE
 #                                   under tmux, "<session>:<pane-id>" from
-#                                   $HERDR_PANE_ID under herdr - then
-#                                   firstmate:0 fallback). Accepts either a
+#                                   $HERDR_PANE_ID under herdr, then the live
+#                                   native-Windows/herdr session-lock pane when
+#                                   available, then firstmate:0 fallback).
+#                                   A stale override is ignored only on
+#                                   native-Windows/herdr when a live
+#                                   auto-discovered fallback resolves.
+#                                   Accepts either a
 #                                   tmux target or a herdr "<session>:<pane-id>"
 #                                   target; which one it's read as is decided by
 #                                   FM_SUPERVISOR_BACKEND (below), independently.
@@ -69,8 +77,10 @@
 #                                   way bin/fm-backend.sh's fm_backend_detect
 #                                   resolves the runtime firstmate itself is
 #                                   executing inside - $TMUX_PANE selects tmux,
-#                                   $HERDR_ENV=1 selects herdr - falling back to
-#                                   tmux). zellij, orca, and cmux are not yet
+#                                   $HERDR_ENV=1 selects herdr, then the live
+#                                   native-Windows/herdr session lock selects
+#                                   herdr, falling back to tmux).
+#                                   zellij, orca, and cmux are not yet
 #                                   supported as supervisor backends; the daemon
 #                                   refuses loudly at startup rather than trying
 #                                   tmux primitives against a non-tmux pane.
@@ -274,6 +284,39 @@ _collapse_newlines() {  # <text>
   printf '%s' "$s"
 }
 
+source_fm_lock_lib() {
+  declare -F holder_alive >/dev/null 2>&1 && return 0
+  local old=${FM_LOCK_LIB_ONLY-} had_old=0
+  local old_state=${STATE-} had_state=0
+  local old_lock=${LOCK-} had_lock=0
+  [ "${FM_LOCK_LIB_ONLY+x}" = x ] && had_old=1
+  [ "${STATE+x}" = x ] && had_state=1
+  [ "${LOCK+x}" = x ] && had_lock=1
+  FM_LOCK_LIB_ONLY=1
+  # shellcheck source=bin/fm-lock.sh
+  . "$FM_DAEMON_DIR/fm-lock.sh"
+  if [ "$had_old" -eq 1 ]; then
+    FM_LOCK_LIB_ONLY=$old
+  else
+    unset FM_LOCK_LIB_ONLY
+  fi
+  if [ "$had_state" -eq 1 ]; then
+    STATE=$old_state
+  else
+    unset STATE
+  fi
+  if [ "$had_lock" -eq 1 ]; then
+    LOCK=$old_lock
+  else
+    unset LOCK
+  fi
+}
+
+herdr_session_lock_owner_alive() {
+  source_fm_lock_lib || return 1
+  holder_alive "$1"
+}
+
 # Auto-discover the supervisor pane at startup. Priority:
 #   1. FM_SUPERVISOR_TARGET env (explicit override) — caller passes it in;
 #      may be a tmux target or a herdr "<session>:<pane-id>" target (paired
@@ -291,6 +334,26 @@ _collapse_newlines() {  # <text>
 #      named differently). The caller logs a warning in that case.
 # Returns the resolved target on stdout; returns 1 if only the fallback is left
 # AND the fallback does not resolve to a live pane.
+discover_herdr_session_lock_target() {
+  local lock owner rest session pane terminal
+  fm_platform_is_windows || return 1
+  lock="$(_state_root)/.lock"
+  [ -f "$lock" ] || return 1
+  owner=$(cat "$lock" 2>/dev/null || true)
+  case "$owner" in
+    herdr:*:*:*) ;;
+    *) return 1 ;;
+  esac
+  rest=${owner#herdr:}
+  session=${rest%%:*}
+  rest=${rest#*:}
+  terminal=${rest##*:}
+  pane=${rest%:*}
+  [ -n "$session" ] && [ -n "$pane" ] && [ -n "$terminal" ] || return 1
+  herdr_session_lock_owner_alive "$owner" || return 1
+  printf '%s:%s' "$session" "$pane"
+}
+
 discover_supervisor_target() {
   local herdr_target
   if [ -n "${FM_SUPERVISOR_TARGET:-}" ]; then
@@ -308,8 +371,64 @@ discover_supervisor_target() {
     printf '%s:%s' "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE"
     return 0
   fi
+  if herdr_target=$(discover_herdr_session_lock_target); then
+    printf '%s' "$herdr_target"
+    return 0
+  fi
   printf '%s' "$FM_SUPERVISOR_TARGET_DEFAULT"
   return 1
+}
+
+supervisor_target_source() {
+  local mode=${1:-with-override}
+  if [ "$mode" != "without-override" ] && [ -n "${FM_SUPERVISOR_TARGET:-}" ]; then
+    printf 'FM_SUPERVISOR_TARGET'
+  elif [ -n "${TMUX_PANE:-}" ]; then
+    printf 'TMUX_PANE'
+  elif [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+    printf 'HERDR_ENV(HERDR_PANE_ID)'
+  elif discover_herdr_session_lock_target >/dev/null 2>&1; then
+    printf 'SESSION_LOCK'
+  else
+    printf 'FALLBACK(firstmate:0)'
+  fi
+}
+
+resolve_supervisor_target_for_startup() {
+  local backend=$1 discovered target_source explicit_target fallback fallback_source
+  explicit_target=${FM_SUPERVISOR_TARGET:-}
+  target_source=$(supervisor_target_source)
+  if discovered=$(discover_supervisor_target); then
+    : # resolved cleanly
+  else
+    if fm_platform_is_windows && [ "$backend" = herdr ]; then
+      echo "warn: could not auto-discover supervisor pane (no FM_SUPERVISOR_TARGET, TMUX_PANE, HERDR_ENV/HERDR_PANE_ID, or herdr session-lock pane); falling back to '$discovered' - verify this is firstmate's pane" >&2
+    else
+      echo "warn: could not auto-discover supervisor pane (no FM_SUPERVISOR_TARGET, TMUX_PANE, or HERDR_ENV/HERDR_PANE_ID); falling back to '$discovered' — verify this is firstmate's pane" >&2
+    fi
+  fi
+  if fm_backend_target_exists "$backend" "$discovered"; then
+    printf '%s\t%s' "$discovered" "$target_source"
+    return 0
+  fi
+  if [ -n "$explicit_target" ] && fm_platform_is_windows && [ "$backend" = herdr ]; then
+    fallback_source=$(supervisor_target_source without-override)
+    if fallback=$(FM_SUPERVISOR_TARGET='' discover_supervisor_target) \
+       && fm_backend_target_exists "$backend" "$fallback"; then
+      log "startup: ignoring stale FM_SUPERVISOR_TARGET '$explicit_target'; using $fallback_source target '$fallback'"
+      printf '%s\t%s' "$fallback" "$fallback_source(stale FM_SUPERVISOR_TARGET ignored)"
+      return 0
+    fi
+  fi
+  printf '%s\t%s' "$discovered" "$target_source"
+  return 1
+}
+
+should_shutdown_on_afk_inactive_tick() {
+  local backend=$1 state=$2
+  fm_platform_is_windows || return 1
+  [ "$backend" = herdr ] || return 1
+  ! afk_active "$state"
 }
 
 # Auto-discover the supervisor's BACKEND at startup - independent of the
@@ -319,7 +438,8 @@ discover_supervisor_target() {
 #   1. FM_SUPERVISOR_BACKEND env (explicit override).
 #   2. $TMUX_PANE set — tmux.
 #   3. $HERDR_ENV=1 (with $HERDR_PANE_ID present) — herdr.
-#   4. FM_SUPERVISOR_BACKEND_DEFAULT (tmux) — matches the target fallback above.
+#   4. Windows/herdr session lock - herdr.
+#   5. FM_SUPERVISOR_BACKEND_DEFAULT (tmux) - matches the target fallback above.
 # Returns the resolved backend on stdout; returns 1 if only the fallback is left.
 discover_supervisor_backend() {
   if [ -n "${FM_SUPERVISOR_BACKEND:-}" ]; then
@@ -331,6 +451,10 @@ discover_supervisor_backend() {
     return 0
   fi
   if [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+    printf 'herdr'
+    return 0
+  fi
+  if discover_herdr_session_lock_target >/dev/null 2>&1; then
     printf 'herdr'
     return 0
   fi
@@ -919,12 +1043,12 @@ fm_super_main() {
 
   # --- auto-discover the supervisor BACKEND (tmux vs herdr) first -----------
   # Priority: FM_SUPERVISOR_BACKEND override > $TMUX_PANE (tmux) > $HERDR_ENV=1
-  # (herdr) > tmux fallback. Resolved before the target below, since target
-  # discovery composes a herdr "<session>:<pane-id>" string using the same
-  # $HERDR_PANE_ID/$HERDR_SESSION markers this checks. Exporting the result
-  # into FM_SUPERVISOR_BACKEND makes inject_msg/pane_is_busy/pane_input_pending
-  # (which read that env var) dispatch through the right backend without an
-  # extra global thread-through.
+  # (herdr) > Windows/herdr session lock > tmux fallback. Resolved before the
+  # target below, since target discovery composes a herdr "<session>:<pane-id>"
+  # string using the same $HERDR_PANE_ID/$HERDR_SESSION markers this checks.
+  # Exporting the result into FM_SUPERVISOR_BACKEND makes
+  # inject_msg/pane_is_busy/pane_input_pending (which read that env var)
+  # dispatch through the right backend without an extra global thread-through.
   local discovered_backend backend_source
   backend_source="FM_SUPERVISOR_BACKEND"
   if [ -z "${FM_SUPERVISOR_BACKEND:-}" ]; then
@@ -932,6 +1056,8 @@ fm_super_main() {
       backend_source="TMUX_PANE"
     elif [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
       backend_source="HERDR_ENV"
+    elif discover_herdr_session_lock_target >/dev/null 2>&1; then
+      backend_source="SESSION_LOCK"
     else
       backend_source="FALLBACK($FM_SUPERVISOR_BACKEND_DEFAULT)"
     fi
@@ -956,26 +1082,16 @@ fm_super_main() {
   # --- auto-discover the supervisor target (the pane running firstmate) -----
   # Priority: FM_SUPERVISOR_TARGET override > $TMUX_PANE (tmux; inherited from
   # the pane that launched the daemon, normally firstmate's own) >
-  # $HERDR_PANE_ID (herdr, composed into "<session>:<pane-id>") > firstmate:0
-  # fallback. Exporting the result into FM_SUPERVISOR_TARGET makes inject_msg
-  # (which reads that env var) use the discovered pane without an extra global.
-  local discovered target_source
-  target_source="FM_SUPERVISOR_TARGET"
-  if [ -z "${FM_SUPERVISOR_TARGET:-}" ]; then
-    if [ -n "${TMUX_PANE:-}" ]; then
-      target_source="TMUX_PANE"
-    elif [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
-      target_source="HERDR_ENV(HERDR_PANE_ID)"
-    else
-      target_source="FALLBACK(firstmate:0)"
-    fi
+  # $HERDR_PANE_ID (herdr, composed into "<session>:<pane-id>") > Windows/herdr
+  # session lock > firstmate:0 fallback. Exporting the result into
+  # FM_SUPERVISOR_TARGET makes inject_msg (which reads that env var) use the
+  # discovered pane without an extra global.
+  local resolution target_source target_valid=1
+  if resolution=$(resolve_supervisor_target_for_startup "$BACKEND"); then
+    target_valid=0
   fi
-  if discovered=$(discover_supervisor_target); then
-    : # resolved cleanly
-  else
-    echo "warn: could not auto-discover supervisor pane (no FM_SUPERVISOR_TARGET, TMUX_PANE, or HERDR_ENV/HERDR_PANE_ID); falling back to '$discovered' — verify this is firstmate's pane" >&2
-  fi
-  FM_SUPERVISOR_TARGET="$discovered"
+  FM_SUPERVISOR_TARGET="${resolution%%	*}"
+  target_source="${resolution#*	}"
   local TARGET="$FM_SUPERVISOR_TARGET"
 
   # --- validate supervisor target at startup (a missing target is a typo) ---
@@ -983,7 +1099,7 @@ fm_super_main() {
   # probe, so a herdr supervisor pane is checked via the herdr adapter; for
   # backend=tmux this runs the exact same `tmux display-message -p -t "$TARGET"
   # '#{pane_id}'` call as before.
-  if ! fm_backend_target_exists "$BACKEND" "$TARGET"; then
+  if [ "$target_valid" -ne 0 ]; then
     echo "error: supervisor target '$TARGET' does not resolve to a $BACKEND pane; set FM_SUPERVISOR_TARGET" >&2
     log "startup failed: target '$TARGET' not found (backend=$BACKEND)"
     fm_lock_release "$LOCK" 2>/dev/null || true
@@ -1042,6 +1158,11 @@ fm_super_main() {
 
   local rc reason
   while true; do
+    if should_shutdown_on_afk_inactive_tick "$BACKEND" "$STATE"; then
+      log "afk inactive on housekeeping tick; shutting down"
+      cleanup
+    fi
+
     # --- pane-gone guard (preserved) ---------------------------------------
     # With the #29 watcher's enqueue-before-suppress, a wake is no longer
     # swallowed by running the watcher with no injection target. We still back
