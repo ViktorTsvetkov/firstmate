@@ -644,6 +644,48 @@ test_arm_waits_for_peer_beacon_after_child_stands_down() {
   pass "arm waits for a peer watcher beacon after child stands down"
 }
 
+test_windows_arm_reports_healthy_when_peer_wins_before_child_output() {
+  local dir state fakebin armout peer beater identity status real_mkdir
+  dir=$(make_case arm-windows-peer-output-race)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  real_mkdir=$(command -v mkdir) || fail "mkdir not found"
+  sleep 300 &
+  peer=$!
+  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer") || fail "could not identify peer pid"
+  mkdir "$state/.watch.lock"
+  printf '%s\n' "$peer" > "$state/.watch.lock/pid"
+  printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
+  printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
+  cat > "$fakebin/mkdir" <<SH
+#!/usr/bin/env bash
+set -u
+last=\${@: -1}
+case "\$last" in
+  *".watch.lock") sleep 1 ;;
+esac
+exec "$real_mkdir" "\$@"
+SH
+  chmod +x "$fakebin/mkdir"
+  (
+    sleep 0.1
+    touch "$state/.last-watcher-beat"
+  ) &
+  beater=$!
+  status=0
+  PATH="$fakebin:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=4 "$WATCH_ARM" > "$armout" || status=$?
+  wait "$beater" 2>/dev/null || true
+  [ "$status" -eq 0 ] || fail "arm returned non-zero while peer won before child output (status $status): $(cat "$armout")"
+  grep -F "watcher: healthy pid=$peer" "$armout" >/dev/null || fail "arm did not report the peer watcher as healthy"
+  ! grep -qF 'watcher: started' "$armout" || fail "arm falsely reported started for a peer-owned watcher"
+  ! grep -qF 'watcher: FAILED' "$armout" || fail "arm falsely reported FAILED during peer output race"
+  kill "$peer" 2>/dev/null || true
+  wait "$peer" 2>/dev/null || true
+  pass "Windows arm reports healthy when a peer wins before child output"
+}
+
 test_windows_arm_waits_for_slow_first_beacon() {
   local dir state fakebin real_touch armout armpid i lock_pid
   dir=$(make_case arm-windows-slow-first-beacon)
@@ -830,6 +872,7 @@ test_arm_starts_and_self_heals
 test_arm_hup_cleans_child_and_temp_output
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down
+test_windows_arm_reports_healthy_when_peer_wins_before_child_output
 test_windows_arm_waits_for_slow_first_beacon
 test_windows_herdr_poll_refreshes_beacon_between_slow_reads
 test_arm_fails_loud_when_no_fresh_watcher_confirmable

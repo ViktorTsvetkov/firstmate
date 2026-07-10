@@ -97,35 +97,47 @@ watch_output_has_already_running() {
 }
 
 wait_windows_recorded_watcher() {
-  local recorded_pid=$1 rc=0 reported_started=0
+  local recorded_pid=$1 rc=0 child_watcher_pid=
   while healthy_watcher && [ "$HEALTHY_PID" = "$recorded_pid" ]; do
+    child_watcher_pid=$(cat "$child_pid_file" 2>/dev/null || true)
+    if [ -n "$child_watcher_pid" ] && [ "$child_watcher_pid" = "$recorded_pid" ]; then
+      echo "watcher: started pid=$recorded_pid (beacon fresh)"
+      wait "$child"
+      rc=$?
+      child_done=1
+      print_watch_output "$child_out"
+      rm -f "$child_out" "$child_pid_file" 2>/dev/null || true
+      exit "$rc"
+    fi
     if [ "$child_done" -eq 0 ] && ! fm_pid_alive "$child"; then
       wait "$child"
       rc=$?
       child_done=1
       if [ "$rc" -eq 0 ] && watch_output_has_wake "$child_out"; then
         print_watch_output "$child_out"
-        rm -f "$child_out" 2>/dev/null || true
+        rm -f "$child_out" "$child_pid_file" 2>/dev/null || true
         exit 0
       fi
       if [ "$rc" -eq 0 ]; then
         report_healthy
-        rm -f "$child_out" 2>/dev/null || true
+        rm -f "$child_out" "$child_pid_file" 2>/dev/null || true
         exit 0
       fi
     fi
-    if [ "$reported_started" -eq 0 ]; then
-      echo "watcher: started pid=$recorded_pid (beacon fresh)"
-      reported_started=1
-    fi
+    [ "$(date +%s)" -ge "$deadline" ] && break
     sleep 0.2
   done
+  if healthy_watcher && [ "$HEALTHY_PID" = "$recorded_pid" ]; then
+    report_healthy
+    rm -f "$child_out" "$child_pid_file" 2>/dev/null || true
+    exit 0
+  fi
   if [ "$child_done" -eq 0 ]; then
     wait "$child"
     rc=$?
   fi
   print_watch_output "$child_out"
-  rm -f "$child_out" 2>/dev/null || true
+  rm -f "$child_out" "$child_pid_file" 2>/dev/null || true
   exit "$rc"
 }
 
@@ -170,6 +182,7 @@ fi
 # wake exit propagates out so the harness re-notifies firstmate.
 child=
 child_out=
+child_pid_file=
 cleanup_child() {
   if [ -n "$child" ] && fm_pid_alive "$child"; then
     if fm_platform_is_windows; then
@@ -181,6 +194,9 @@ cleanup_child() {
   if [ -n "$child_out" ]; then
     rm -f "$child_out" 2>/dev/null || true
   fi
+  if [ -n "$child_pid_file" ]; then
+    rm -f "$child_pid_file" 2>/dev/null || true
+  fi
 }
 trap 'cleanup_child; exit 129' HUP
 trap 'cleanup_child; exit 143' TERM INT
@@ -189,7 +205,12 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
   echo "watcher: FAILED - no live watcher with a fresh beacon"
   exit 1
 }
-"$WATCH" >"$child_out" &
+child_pid_file=$(mktemp "$STATE/.watch-arm-child-pid.XXXXXX") || {
+  rm -f "$child_out" 2>/dev/null || true
+  echo "watcher: FAILED - no live watcher with a fresh beacon"
+  exit 1
+}
+FM_WATCH_ARM_CHILD_PID_FILE="$child_pid_file" "$WATCH" >"$child_out" &
 child=$!
 child_done=0
 
@@ -204,7 +225,7 @@ while :; do
       wait "$child"
       rc=$?
       print_watch_output "$child_out"
-      rm -f "$child_out" 2>/dev/null || true
+      rm -f "$child_out" "$child_pid_file" 2>/dev/null || true
       exit "$rc"
     fi
     if fm_platform_is_windows \
@@ -216,7 +237,7 @@ while :; do
     # Another watcher won the singleton; our child stood down. Report the live one.
     report_healthy
     wait "$child" 2>/dev/null || true
-    rm -f "$child_out" 2>/dev/null || true
+    rm -f "$child_out" "$child_pid_file" 2>/dev/null || true
     exit 0
   fi
   if [ "$child_done" -eq 0 ] && ! fm_pid_alive "$child"; then
@@ -225,7 +246,7 @@ while :; do
     child_done=1
     if [ "$rc" -eq 0 ] && watch_output_has_wake "$child_out"; then
       print_watch_output "$child_out"
-      rm -f "$child_out" 2>/dev/null || true
+      rm -f "$child_out" "$child_pid_file" 2>/dev/null || true
       exit 0
     fi
   fi
