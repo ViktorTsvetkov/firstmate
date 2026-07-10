@@ -591,6 +591,82 @@ test_arm_hup_cleans_child_and_temp_output() {
   pass "arm cleans child watcher and temp output on HUP"
 }
 
+test_windows_arm_signal_cleans_started_child() {
+  local dir state fakebin armout i armpid lock_pid status
+  dir=$(make_case arm-windows-signal-cleanup)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  PATH="$fakebin:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF 'watcher: started pid=' "$armout" || fail "Windows arm did not start before signal cleanup check"
+  lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  kill -TERM "$armpid" 2>/dev/null || fail "could not send TERM to Windows arm"
+  wait_for_exit "$armpid" 80
+  status=$?
+  [ "$status" -eq 143 ] || fail "Windows arm did not exit with TERM status (got $status)"
+  i=0
+  while [ "$i" -lt 80 ] && is_live_non_zombie "$lock_pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  ! is_live_non_zombie "$lock_pid" || fail "Windows signal cleanup left watcher child running"
+  ! ls "$state"/.watch-arm-output.* "$state"/.watch-arm-child-pid.* >/dev/null 2>&1 || fail "Windows signal cleanup left temp files behind"
+  pass "Windows arm cleans its started child on signal"
+}
+
+test_windows_arm_signal_cleans_recorded_child_when_wrapper_check_fails() {
+  local dir state fakebin armout bashenv i armpid lock_pid status real_kill
+  dir=$(make_case arm-windows-recorded-signal-cleanup)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  bashenv="$dir/bashenv"
+  real_kill=/bin/kill
+  [ -x "$real_kill" ] || fail "/bin/kill not found"
+  printf '%s\n' 'enable -n kill 2>/dev/null || true' > "$bashenv"
+  cat > "$fakebin/kill" <<SH
+#!/usr/bin/env bash
+set -u
+if [ "\${1:-}" = "-0" ] && [ -e "$state/fail-next-kill0" ] && [ ! -e "$state/failed-kill0" ]; then
+  touch "$state/failed-kill0"
+  exit 1
+fi
+exec "$real_kill" "\$@"
+SH
+  chmod +x "$fakebin/kill"
+  PATH="$fakebin:$PATH" BASH_ENV="$bashenv" FM_PLATFORM_IS_WINDOWS=yes FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF 'watcher: started pid=' "$armout" || fail "Windows arm did not start before recorded-pid cleanup check"
+  lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  touch "$state/fail-next-kill0"
+  "$real_kill" -TERM "$armpid" 2>/dev/null || fail "could not send TERM to Windows arm"
+  wait_for_exit "$armpid" 80
+  status=$?
+  [ "$status" -eq 143 ] || fail "Windows arm did not exit with TERM status after wrapper check failed (got $status)"
+  [ -e "$state/failed-kill0" ] || fail "test did not force a failed wrapper liveness check"
+  i=0
+  while [ "$i" -lt 80 ] && is_live_non_zombie "$lock_pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  ! is_live_non_zombie "$lock_pid" || fail "Windows signal cleanup left recorded watcher child running"
+  ! ls "$state"/.watch-arm-output.* "$state"/.watch-arm-child-pid.* >/dev/null 2>&1 || fail "Windows recorded-pid cleanup left temp files behind"
+  pass "Windows arm cleans recorded child when wrapper liveness check fails"
+}
+
 test_arm_propagates_immediate_wake_before_confirmation() {
   local dir state fakebin armout drain_out check_file rc
   dir=$(make_case arm-immediate-wake)
@@ -642,6 +718,91 @@ test_arm_waits_for_peer_beacon_after_child_stands_down() {
   kill "$peer" 2>/dev/null || true
   wait "$peer" 2>/dev/null || true
   pass "arm waits for a peer watcher beacon after child stands down"
+}
+
+test_windows_arm_reports_healthy_when_peer_wins_before_child_output() {
+  local dir state fakebin armout peer beater identity status real_mkdir
+  dir=$(make_case arm-windows-peer-output-race)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  real_mkdir=$(command -v mkdir) || fail "mkdir not found"
+  sleep 300 &
+  peer=$!
+  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer") || fail "could not identify peer pid"
+  mkdir "$state/.watch.lock"
+  printf '%s\n' "$peer" > "$state/.watch.lock/pid"
+  printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
+  printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
+  cat > "$fakebin/mkdir" <<SH
+#!/usr/bin/env bash
+set -u
+last=\${@: -1}
+case "\$last" in
+  *".watch.lock") sleep 1 ;;
+esac
+exec "$real_mkdir" "\$@"
+SH
+  chmod +x "$fakebin/mkdir"
+  (
+    sleep 0.1
+    touch "$state/.last-watcher-beat"
+  ) &
+  beater=$!
+  status=0
+  PATH="$fakebin:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=4 "$WATCH_ARM" > "$armout" || status=$?
+  wait "$beater" 2>/dev/null || true
+  [ "$status" -eq 0 ] || fail "arm returned non-zero while peer won before child output (status $status): $(cat "$armout")"
+  grep -F "watcher: healthy pid=$peer" "$armout" >/dev/null || fail "arm did not report the peer watcher as healthy"
+  ! grep -qF 'watcher: started' "$armout" || fail "arm falsely reported started for a peer-owned watcher"
+  ! grep -qF 'watcher: FAILED' "$armout" || fail "arm falsely reported FAILED during peer output race"
+  kill "$peer" 2>/dev/null || true
+  wait "$peer" 2>/dev/null || true
+  pass "Windows arm reports healthy when a peer wins before child output"
+}
+
+test_windows_arm_does_not_orphan_child_when_peer_timeout_wins() {
+  local dir state fakebin armout peer beater identity status real_mkdir lock_pid
+  dir=$(make_case arm-windows-peer-timeout-child)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  real_mkdir=$(command -v mkdir) || fail "mkdir not found"
+  sleep 300 &
+  peer=$!
+  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer") || fail "could not identify peer pid"
+  mkdir "$state/.watch.lock"
+  printf '%s\n' "$peer" > "$state/.watch.lock/pid"
+  printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
+  printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
+  cat > "$fakebin/mkdir" <<SH
+#!/usr/bin/env bash
+set -u
+last=\${@: -1}
+case "\$last" in
+  *".watch.lock") sleep 4 ;;
+esac
+exec "$real_mkdir" "\$@"
+SH
+  chmod +x "$fakebin/mkdir"
+  (
+    sleep 0.1
+    touch "$state/.last-watcher-beat"
+  ) &
+  beater=$!
+  status=0
+  PATH="$fakebin:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=1 "$WATCH_ARM" > "$armout" || status=$?
+  wait "$beater" 2>/dev/null || true
+  [ "$status" -eq 0 ] || fail "arm returned non-zero while peer stayed healthy through timeout (status $status): $(cat "$armout")"
+  grep -F "watcher: healthy pid=$peer" "$armout" >/dev/null || fail "arm did not report the peer watcher as healthy"
+  kill "$peer" 2>/dev/null || true
+  wait "$peer" 2>/dev/null || true
+  sleep 5
+  lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  ! is_live_non_zombie "$lock_pid" || fail "arm left an untracked child watcher alive as pid $lock_pid"
+  pass "Windows arm does not orphan a child when peer timeout wins"
 }
 
 test_windows_arm_waits_for_slow_first_beacon() {
@@ -828,8 +989,12 @@ test_watcher_self_evicts_on_lock_takeover
 test_arm_reports_healthy_for_live_fresh_watcher
 test_arm_starts_and_self_heals
 test_arm_hup_cleans_child_and_temp_output
+test_windows_arm_signal_cleans_started_child
+test_windows_arm_signal_cleans_recorded_child_when_wrapper_check_fails
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down
+test_windows_arm_reports_healthy_when_peer_wins_before_child_output
+test_windows_arm_does_not_orphan_child_when_peer_timeout_wins
 test_windows_arm_waits_for_slow_first_beacon
 test_windows_herdr_poll_refreshes_beacon_between_slow_reads
 test_arm_fails_loud_when_no_fresh_watcher_confirmable

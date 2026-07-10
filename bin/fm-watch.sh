@@ -83,6 +83,9 @@ if fm_platform_is_windows; then
   # Git Bash can surface a transient fork pid in the mkdir lock; the singleton holder is this main watcher.
   printf '%s\n' "$WATCHER_PID" > "$WATCH_LOCK/pid" || true
 fi
+if fm_platform_is_windows && [ -n "${FM_WATCH_ARM_CHILD_PID_FILE:-}" ]; then
+  printf '%s\n' "$WATCHER_PID" > "$FM_WATCH_ARM_CHILD_PID_FILE" 2>/dev/null || true
+fi
 printf '%s\n' "$FM_HOME" > "$WATCH_LOCK/fm-home" || true
 printf '%s\n' "$WATCH_PATH" > "$WATCH_LOCK/watcher-path" || true
 fm_pid_identity "$WATCHER_PID" > "$WATCH_LOCK/pid-identity" 2>/dev/null || true
