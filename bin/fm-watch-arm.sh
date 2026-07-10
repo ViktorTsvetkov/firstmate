@@ -27,6 +27,12 @@
 # returns the FAILED line. On started/healthy it exits zero; on FAILED it exits
 # non-zero so the failure is loud and a caller can react. A healthy line means a
 # live cycle already exists; do not churn extra no-op arms until that cycle fires.
+# On native Windows, Git Bash can expose a shell job pid that differs from the
+# watcher's recorded BASHPID, so the arm reconciles through the pid written by
+# the watcher itself and never kills a live lock holder with a fresh beacon just
+# because the wrapper pid differs. If the child fires before confirmation, this
+# script forwards only the child's stdout; draining state/.wake-queue remains the
+# job of fm-wake-drain.sh and session start.
 #
 # --restart: stop ONLY this FM_HOME's watcher (the pid recorded in THIS home's
 # state/.watch.lock) and start a fresh one. It resolves and signals exactly that
