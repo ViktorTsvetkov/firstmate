@@ -591,6 +591,36 @@ test_arm_hup_cleans_child_and_temp_output() {
   pass "arm cleans child watcher and temp output on HUP"
 }
 
+test_windows_arm_signal_cleans_started_child() {
+  local dir state fakebin armout i armpid lock_pid status
+  dir=$(make_case arm-windows-signal-cleanup)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  PATH="$fakebin:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF 'watcher: started pid=' "$armout" || fail "Windows arm did not start before signal cleanup check"
+  lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  kill -TERM "$armpid" 2>/dev/null || fail "could not send TERM to Windows arm"
+  wait_for_exit "$armpid" 80
+  status=$?
+  [ "$status" -eq 143 ] || fail "Windows arm did not exit with TERM status (got $status)"
+  i=0
+  while [ "$i" -lt 80 ] && is_live_non_zombie "$lock_pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  ! is_live_non_zombie "$lock_pid" || fail "Windows signal cleanup left watcher child running"
+  ! ls "$state"/.watch-arm-output.* "$state"/.watch-arm-child-pid.* >/dev/null 2>&1 || fail "Windows signal cleanup left temp files behind"
+  pass "Windows arm cleans its started child on signal"
+}
+
 test_arm_propagates_immediate_wake_before_confirmation() {
   local dir state fakebin armout drain_out check_file rc
   dir=$(make_case arm-immediate-wake)
@@ -913,6 +943,7 @@ test_watcher_self_evicts_on_lock_takeover
 test_arm_reports_healthy_for_live_fresh_watcher
 test_arm_starts_and_self_heals
 test_arm_hup_cleans_child_and_temp_output
+test_windows_arm_signal_cleans_started_child
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down
 test_windows_arm_reports_healthy_when_peer_wins_before_child_output

@@ -214,12 +214,44 @@ fi
 child=
 child_out=
 child_pid_file=
+child_watcher_pid() {
+  [ -n "$child_pid_file" ] || return 1
+  cat "$child_pid_file" 2>/dev/null || true
+}
+
+healthy_watcher_is_child() {
+  local pid
+  [ -n "${HEALTHY_PID:-}" ] || return 1
+  [ -n "$child" ] && [ "$HEALTHY_PID" = "$child" ] && return 0
+  fm_platform_is_windows || return 1
+  pid=$(child_watcher_pid)
+  [ -n "$pid" ] && [ "$HEALTHY_PID" = "$pid" ]
+}
+
+healthy_watcher_is_peer() {
+  healthy_watcher || return 1
+  healthy_watcher_is_child && return 1
+  [ -n "$child_pid_file" ] || return 1
+  [ -n "$(child_watcher_pid)" ] || return 1
+}
+
+terminate_child() {
+  local pid
+  kill -TERM "$child" 2>/dev/null || true
+  if fm_platform_is_windows; then
+    pid=$(child_watcher_pid)
+    if [ -n "$pid" ] && [ "$pid" != "$child" ] && fm_pid_alive "$pid"; then
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+  fi
+}
+
 cleanup_child() {
   if [ -n "$child" ] && fm_pid_alive "$child"; then
     if fm_platform_is_windows; then
-      healthy_watcher || kill -TERM "$child" 2>/dev/null || true
+      healthy_watcher_is_peer || terminate_child
     else
-      kill -TERM "$child" 2>/dev/null || true
+      terminate_child
     fi
   fi
   if [ -n "$child_out" ]; then
