@@ -276,6 +276,7 @@ FMX_FOLLOWUP_MAX_COUNT=3   # local cap on X completion follow-ups per linked men
 FM_LOCK_STALE_AFTER=2   # seconds before dead-pid lock records can be reclaimed; mid-acquire locks keep at least 2s grace
 FM_GUARD_GRACE=300      # seconds before guard warnings, arm health checks, and the Claude turn-end guard treat a watcher beacon as stale
 FM_ARM_CONFIRM_TIMEOUT=10   # seconds fm-watch-arm waits to confirm a fresh watcher before reporting FAILED; native Windows defaults to 30
+FM_WATCH_ARM_CHILD_PID_FILE=   # internal native-Windows arm/watch handshake path; set only by fm-watch-arm.sh so it can reconcile Git Bash wrapper pids to the watcher BASHPID
 FM_WATCHER_STALE_GRACE=300   # defaults to FM_GUARD_GRACE; seconds a live watcher lock may have a stale beacon before re-arm errors
 FM_SIGNAL_GRACE=30      # seconds to coalesce nearby status and turn-end signals into one wake
 FM_CAPTAIN_RE='done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged'   # status regex that makes watcher and daemon signal/stale/scan output captain-relevant
