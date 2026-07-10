@@ -621,6 +621,52 @@ test_windows_arm_signal_cleans_started_child() {
   pass "Windows arm cleans its started child on signal"
 }
 
+test_windows_arm_signal_cleans_recorded_child_when_wrapper_check_fails() {
+  local dir state fakebin armout bashenv i armpid lock_pid status real_kill
+  dir=$(make_case arm-windows-recorded-signal-cleanup)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  bashenv="$dir/bashenv"
+  real_kill=/bin/kill
+  [ -x "$real_kill" ] || fail "/bin/kill not found"
+  printf '%s\n' 'enable -n kill 2>/dev/null || true' > "$bashenv"
+  cat > "$fakebin/kill" <<SH
+#!/usr/bin/env bash
+set -u
+if [ "\${1:-}" = "-0" ] && [ -e "$state/fail-next-kill0" ] && [ ! -e "$state/failed-kill0" ]; then
+  touch "$state/failed-kill0"
+  exit 1
+fi
+exec "$real_kill" "\$@"
+SH
+  chmod +x "$fakebin/kill"
+  PATH="$fakebin:$PATH" BASH_ENV="$bashenv" FM_PLATFORM_IS_WINDOWS=yes FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF 'watcher: started pid=' "$armout" || fail "Windows arm did not start before recorded-pid cleanup check"
+  lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  touch "$state/fail-next-kill0"
+  "$real_kill" -TERM "$armpid" 2>/dev/null || fail "could not send TERM to Windows arm"
+  wait_for_exit "$armpid" 80
+  status=$?
+  [ "$status" -eq 143 ] || fail "Windows arm did not exit with TERM status after wrapper check failed (got $status)"
+  [ -e "$state/failed-kill0" ] || fail "test did not force a failed wrapper liveness check"
+  i=0
+  while [ "$i" -lt 80 ] && is_live_non_zombie "$lock_pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  ! is_live_non_zombie "$lock_pid" || fail "Windows signal cleanup left recorded watcher child running"
+  ! ls "$state"/.watch-arm-output.* "$state"/.watch-arm-child-pid.* >/dev/null 2>&1 || fail "Windows recorded-pid cleanup left temp files behind"
+  pass "Windows arm cleans recorded child when wrapper liveness check fails"
+}
+
 test_arm_propagates_immediate_wake_before_confirmation() {
   local dir state fakebin armout drain_out check_file rc
   dir=$(make_case arm-immediate-wake)
@@ -944,6 +990,7 @@ test_arm_reports_healthy_for_live_fresh_watcher
 test_arm_starts_and_self_heals
 test_arm_hup_cleans_child_and_temp_output
 test_windows_arm_signal_cleans_started_child
+test_windows_arm_signal_cleans_recorded_child_when_wrapper_check_fails
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down
 test_windows_arm_reports_healthy_when_peer_wins_before_child_output

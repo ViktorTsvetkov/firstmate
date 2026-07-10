@@ -246,8 +246,16 @@ terminate_child() {
   fi
 }
 
+child_or_recorded_watcher_alive() {
+  local pid
+  [ -n "$child" ] && fm_pid_alive "$child" && return 0
+  fm_platform_is_windows || return 1
+  pid=$(child_watcher_pid)
+  [ -n "$pid" ] && fm_pid_alive "$pid"
+}
+
 cleanup_child() {
-  if [ -n "$child" ] && fm_pid_alive "$child"; then
+  if child_or_recorded_watcher_alive; then
     if fm_platform_is_windows; then
       healthy_watcher_is_peer || terminate_child
     else
