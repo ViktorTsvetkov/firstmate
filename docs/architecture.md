@@ -132,6 +132,7 @@ Idle secondmate panes are healthy; teardown is explicit and refuses while the se
 
 Secondmate homes converge conservatively to the primary's version and declared inheritable configuration at launch and during locked session start.
 The [`secondmate-provisioning` skill](../.agents/skills/secondmate-provisioning/SKILL.md) owns the full guarded sync, propagation, nudge, and mid-session configuration-push contract.
+On native Windows, the propagation guard normalizes drive-letter path forms before checking whether the destination item is gitignored, so same-store worktree homes inherit config without weakening the refusal for tracked destinations.
 
 Secondmate agents can run on a different verified harness than crewmates.
 `config/secondmate-harness` controls the primary's secondmate launch harness and may also carry optional model and effort tokens as `<harness> [<model>] [<effort>]` on the first non-empty, non-comment line.
