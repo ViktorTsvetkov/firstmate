@@ -211,12 +211,16 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
   echo "watcher: FAILED - no live watcher with a fresh beacon"
   exit 1
 }
-child_pid_file=$(mktemp "$STATE/.watch-arm-child-pid.XXXXXX") || {
-  rm -f "$child_out" 2>/dev/null || true
-  echo "watcher: FAILED - no live watcher with a fresh beacon"
-  exit 1
-}
-FM_WATCH_ARM_CHILD_PID_FILE="$child_pid_file" "$WATCH" >"$child_out" &
+if fm_platform_is_windows; then
+  child_pid_file=$(mktemp "$STATE/.watch-arm-child-pid.XXXXXX") || {
+    rm -f "$child_out" 2>/dev/null || true
+    echo "watcher: FAILED - no live watcher with a fresh beacon"
+    exit 1
+  }
+  FM_WATCH_ARM_CHILD_PID_FILE="$child_pid_file" "$WATCH" >"$child_out" &
+else
+  "$WATCH" >"$child_out" &
+fi
 child=$!
 child_done=0
 
