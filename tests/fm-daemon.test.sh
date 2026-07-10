@@ -850,6 +850,19 @@ test_discover_supervisor_backend_precedence() {
   pass "discover_supervisor_backend: override > TMUX_PANE > HERDR_ENV+HERDR_PANE_ID > tmux fallback"
 }
 
+test_discover_supervisor_backend_herdr_session_lock() {
+  local dir state out
+  dir=$(make_supercase backend-session-lock)
+  state="$dir/state"
+  printf 'herdr:iso1:w7:p4:term-123\n' > "$state/.lock"
+  (
+    fm_platform_is_windows() { return 0; }
+    out=$(FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_backend)
+    [ "$out" = herdr ] || fail "herdr session lock backend was not discovered: $out"
+  ) || fail "session-lock backend discovery subshell failed"
+  pass "discover_supervisor_backend: Windows/herdr session-lock pane selects herdr"
+}
+
 test_discover_supervisor_target_herdr() {
   local out
   out=$(FM_SUPERVISOR_TARGET=explicit:target TMUX_PANE='' HERDR_ENV=1 HERDR_PANE_ID=w1:p9 discover_supervisor_target)
@@ -1171,6 +1184,7 @@ test_max_defer_afk_inactive_does_not_flush_or_alarm
 test_fm_send_exits_nonzero_on_confirmed_swallow
 test_fm_send_exits_nonzero_on_initial_send_failure
 test_discover_supervisor_backend_precedence
+test_discover_supervisor_backend_herdr_session_lock
 test_discover_supervisor_target_herdr
 test_discover_supervisor_target_herdr_session_lock
 test_startup_resolver_honors_valid_explicit_target

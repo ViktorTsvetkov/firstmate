@@ -394,7 +394,8 @@ should_shutdown_on_afk_inactive_tick() {
 #   1. FM_SUPERVISOR_BACKEND env (explicit override).
 #   2. $TMUX_PANE set — tmux.
 #   3. $HERDR_ENV=1 (with $HERDR_PANE_ID present) — herdr.
-#   4. FM_SUPERVISOR_BACKEND_DEFAULT (tmux) — matches the target fallback above.
+#   4. Windows/herdr session lock - herdr.
+#   5. FM_SUPERVISOR_BACKEND_DEFAULT (tmux) - matches the target fallback above.
 # Returns the resolved backend on stdout; returns 1 if only the fallback is left.
 discover_supervisor_backend() {
   if [ -n "${FM_SUPERVISOR_BACKEND:-}" ]; then
@@ -406,6 +407,10 @@ discover_supervisor_backend() {
     return 0
   fi
   if [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+    printf 'herdr'
+    return 0
+  fi
+  if discover_herdr_session_lock_target >/dev/null 2>&1; then
     printf 'herdr'
     return 0
   fi
@@ -994,12 +999,12 @@ fm_super_main() {
 
   # --- auto-discover the supervisor BACKEND (tmux vs herdr) first -----------
   # Priority: FM_SUPERVISOR_BACKEND override > $TMUX_PANE (tmux) > $HERDR_ENV=1
-  # (herdr) > tmux fallback. Resolved before the target below, since target
-  # discovery composes a herdr "<session>:<pane-id>" string using the same
-  # $HERDR_PANE_ID/$HERDR_SESSION markers this checks. Exporting the result
-  # into FM_SUPERVISOR_BACKEND makes inject_msg/pane_is_busy/pane_input_pending
-  # (which read that env var) dispatch through the right backend without an
-  # extra global thread-through.
+  # (herdr) > Windows/herdr session lock > tmux fallback. Resolved before the
+  # target below, since target discovery composes a herdr "<session>:<pane-id>"
+  # string using the same $HERDR_PANE_ID/$HERDR_SESSION markers this checks.
+  # Exporting the result into FM_SUPERVISOR_BACKEND makes
+  # inject_msg/pane_is_busy/pane_input_pending (which read that env var)
+  # dispatch through the right backend without an extra global thread-through.
   local discovered_backend backend_source
   backend_source="FM_SUPERVISOR_BACKEND"
   if [ -z "${FM_SUPERVISOR_BACKEND:-}" ]; then
@@ -1007,6 +1012,8 @@ fm_super_main() {
       backend_source="TMUX_PANE"
     elif [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
       backend_source="HERDR_ENV"
+    elif discover_herdr_session_lock_target >/dev/null 2>&1; then
+      backend_source="SESSION_LOCK"
     else
       backend_source="FALLBACK($FM_SUPERVISOR_BACKEND_DEFAULT)"
     fi
