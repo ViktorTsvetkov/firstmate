@@ -857,10 +857,27 @@ test_discover_supervisor_backend_herdr_session_lock() {
   printf 'herdr:iso1:w7:p4:term-123\n' > "$state/.lock"
   (
     fm_platform_is_windows() { return 0; }
+    herdr_session_lock_owner_alive() { [ "$1" = "herdr:iso1:w7:p4:term-123" ]; }
     out=$(FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_backend)
     [ "$out" = herdr ] || fail "herdr session lock backend was not discovered: $out"
   ) || fail "session-lock backend discovery subshell failed"
   pass "discover_supervisor_backend: Windows/herdr session-lock pane selects herdr"
+}
+
+test_discover_supervisor_backend_ignores_stale_herdr_session_lock() {
+  local dir state out
+  dir=$(make_supercase backend-stale-session-lock)
+  state="$dir/state"
+  printf 'herdr:iso1:w7:p4:term-123\n' > "$state/.lock"
+  (
+    fm_platform_is_windows() { return 0; }
+    herdr_session_lock_owner_alive() { return 1; }
+    if out=$(FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_backend); then
+      fail "stale herdr session lock should not select the backend: $out"
+    fi
+    [ "$out" = tmux ] || fail "stale session lock should fall through to tmux fallback: $out"
+  ) || fail "stale session-lock backend discovery subshell failed"
+  pass "discover_supervisor_backend: stale Windows/herdr session-lock owner is ignored"
 }
 
 test_discover_supervisor_target_herdr() {
@@ -892,10 +909,27 @@ test_discover_supervisor_target_herdr_session_lock() {
   printf 'herdr:iso1:w7:p4:term-123\n' > "$state/.lock"
   (
     fm_platform_is_windows() { return 0; }
+    herdr_session_lock_owner_alive() { [ "$1" = "herdr:iso1:w7:p4:term-123" ]; }
     out=$(FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_TARGET='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_target)
     [ "$out" = "iso1:w7:p4" ] || fail "herdr session lock target was not discovered: $out"
   ) || fail "session-lock target discovery subshell failed"
   pass "discover_supervisor_target: Windows/herdr can fall back to the session-lock pane"
+}
+
+test_discover_supervisor_target_ignores_stale_herdr_session_lock() {
+  local dir state out
+  dir=$(make_supercase target-stale-session-lock)
+  state="$dir/state"
+  printf 'herdr:iso1:w7:p4:term-123\n' > "$state/.lock"
+  (
+    fm_platform_is_windows() { return 0; }
+    herdr_session_lock_owner_alive() { return 1; }
+    if out=$(FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_TARGET='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_target); then
+      fail "stale herdr session lock should not select the target: $out"
+    fi
+    [ "$out" = "firstmate:0" ] || fail "stale session lock should fall through to firstmate fallback: $out"
+  ) || fail "stale session-lock target discovery subshell failed"
+  pass "discover_supervisor_target: stale Windows/herdr session-lock owner is ignored"
 }
 
 test_startup_resolver_honors_valid_explicit_target() {
@@ -941,6 +975,7 @@ test_startup_resolver_ignores_stale_explicit_using_session_lock() {
   printf 'herdr:iso2:w3:p8:term-456\n' > "$state/.lock"
   (
     fm_platform_is_windows() { return 0; }
+    herdr_session_lock_owner_alive() { [ "$1" = "herdr:iso2:w3:p8:term-456" ]; }
     fm_backend_target_exists() {
       [ "$1" = herdr ] || fail "unexpected backend: $1"
       [ "$2" = "iso2:w3:p8" ]
@@ -1185,8 +1220,10 @@ test_fm_send_exits_nonzero_on_confirmed_swallow
 test_fm_send_exits_nonzero_on_initial_send_failure
 test_discover_supervisor_backend_precedence
 test_discover_supervisor_backend_herdr_session_lock
+test_discover_supervisor_backend_ignores_stale_herdr_session_lock
 test_discover_supervisor_target_herdr
 test_discover_supervisor_target_herdr_session_lock
+test_discover_supervisor_target_ignores_stale_herdr_session_lock
 test_startup_resolver_honors_valid_explicit_target
 test_startup_resolver_ignores_stale_explicit_herdr_target
 test_startup_resolver_ignores_stale_explicit_using_session_lock

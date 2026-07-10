@@ -274,6 +274,25 @@ _collapse_newlines() {  # <text>
   printf '%s' "$s"
 }
 
+source_fm_lock_lib() {
+  declare -F holder_alive >/dev/null 2>&1 && return 0
+  local old=${FM_LOCK_LIB_ONLY-} had_old=0
+  [ "${FM_LOCK_LIB_ONLY+x}" = x ] && had_old=1
+  FM_LOCK_LIB_ONLY=1
+  # shellcheck source=bin/fm-lock.sh
+  . "$FM_DAEMON_DIR/fm-lock.sh"
+  if [ "$had_old" -eq 1 ]; then
+    FM_LOCK_LIB_ONLY=$old
+  else
+    unset FM_LOCK_LIB_ONLY
+  fi
+}
+
+herdr_session_lock_owner_alive() {
+  source_fm_lock_lib || return 1
+  holder_alive "$1"
+}
+
 # Auto-discover the supervisor pane at startup. Priority:
 #   1. FM_SUPERVISOR_TARGET env (explicit override) — caller passes it in;
 #      may be a tmux target or a herdr "<session>:<pane-id>" target (paired
@@ -307,6 +326,7 @@ discover_herdr_session_lock_target() {
   terminal=${rest##*:}
   pane=${rest%:*}
   [ -n "$session" ] && [ -n "$pane" ] && [ -n "$terminal" ] || return 1
+  herdr_session_lock_owner_alive "$owner" || return 1
   printf '%s:%s' "$session" "$pane"
 }
 
