@@ -97,8 +97,7 @@ watch_output_has_already_running() {
 }
 
 wait_windows_recorded_watcher() {
-  local recorded_pid=$1 rc=0
-  echo "watcher: started pid=$recorded_pid (beacon fresh)"
+  local recorded_pid=$1 rc=0 reported_started=0
   while healthy_watcher && [ "$HEALTHY_PID" = "$recorded_pid" ]; do
     if [ "$child_done" -eq 0 ] && ! fm_pid_alive "$child"; then
       wait "$child"
@@ -109,6 +108,15 @@ wait_windows_recorded_watcher() {
         rm -f "$child_out" 2>/dev/null || true
         exit 0
       fi
+      if [ "$rc" -eq 0 ]; then
+        report_healthy
+        rm -f "$child_out" 2>/dev/null || true
+        exit 0
+      fi
+    fi
+    if [ "$reported_started" -eq 0 ]; then
+      echo "watcher: started pid=$recorded_pid (beacon fresh)"
+      reported_started=1
     fi
     sleep 0.2
   done
