@@ -103,7 +103,7 @@ watch_output_has_already_running() {
 }
 
 wait_windows_recorded_watcher() {
-  local recorded_pid=$1 rc=0 child_watcher_pid= i
+  local recorded_pid=$1 rc=0 child_watcher_pid='' i
   while healthy_watcher && [ "$HEALTHY_PID" = "$recorded_pid" ]; do
     child_watcher_pid=$(cat "$child_pid_file" 2>/dev/null || true)
     if [ -n "$child_watcher_pid" ] && [ "$child_watcher_pid" = "$recorded_pid" ]; then
