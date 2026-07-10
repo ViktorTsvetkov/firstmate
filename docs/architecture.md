@@ -103,6 +103,7 @@ That keeps spawn launch compatible across claude, codex, grok, pi, and opencode 
 On the herdr backend, a secondmate launch lands in that secondmate home's labeled workspace, and crewmates spawned from that home land in the same workspace.
 When seeded with `-`, the home is a durable treehouse lease under the secondmate id, so it survives with no live process and is not recycled by later `treehouse get` or pruning.
 `fm-home-seed.sh` accepts that leased home only when it is a git worktree from the same git common directory as the active firstmate checkout.
+On native Windows, a different-store lease refusal also explains the common standalone-active-home cause and points at the explicit-home path form.
 On native Windows, `fm-home-seed.sh` normalizes drive-letter lease paths before active-home containment checks and records the normalized home path.
 Retirement or seed rollback returns the leased home; normal restart/recovery keeps it leased.
 Seed rollback includes any post-lease validation failure when the acquired home is still a safe git worktree target.

@@ -103,7 +103,7 @@ tests/fm-secondmate-harness.test.sh       # secondmate-vs-crewmate harness resol
 tests/fm-config-inherit.test.sh           # config inheritance destination guard tests, including native-Windows same-store worktree path normalization
 tests/fm-secondmate-lifecycle-e2e.test.sh # persistent secondmate routing, seeding, backlog handoff, spawn, recovery, teardown, and FM_HOME flow tests
 tests/fm-secondmate-safety.test.sh        # secondmate home safety, idle charter, handoff validation, teardown boundary, and child-cleanup fail-closed tests
-tests/fm-home-seed-windows-path.test.sh   # native-Windows treehouse lease path normalization, active-home containment, and post-lease return tests
+tests/fm-home-seed-windows-path.test.sh   # native-Windows treehouse lease path normalization, active-home containment, post-lease return, different-store diagnostic, and POSIX byte-identity tests
 tests/fm-teardown.test.sh                 # fm-teardown.sh landed-work safety and reminder checks: fork-remote allow, squash/content landings, dirty and unlanded refusals, PR-head metadata, no-pr= branch discovery, tasks-axi/manual backlog reminder, --force override, stale-vs-live worktree git index.lock recovery
 tests/fm-review-diff.test.sh              # fm-review-diff.sh authoritative review diff coverage: recorded pr_head=, fetched refs/pull/<n>/head, no-pr local branch behavior, and warning fallback
 tests/fm-pr-merge.test.sh                 # fm-pr-merge.sh records pr= and available pr_head= before merging, parses PR URLs into gh-axi number/--repo calls, defaults to squash, preserves explicit merge methods, rejects malformed URLs and repo overrides, and propagates real merge failures
