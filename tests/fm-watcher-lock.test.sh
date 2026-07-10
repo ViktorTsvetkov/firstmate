@@ -468,6 +468,8 @@ test_watcher_self_evicts_on_lock_takeover() {
   out="$dir/watch.out"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
+  # Wait until the watcher has both acquired the lock and entered its poll loop;
+  # the takeover below is only meaningful after it can observe a replaced lock.
   i=0
   while [ "$i" -lt 50 ]; do
     [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$pid" ] && [ -e "$state/.last-watcher-beat" ] && break
