@@ -934,6 +934,28 @@ test_windows_create_task_converts_shell_env_for_tab_create() {
   pass "fm_backend_herdr_create_task: Windows branch converts the explicit SHELL env for herdr tab create"
 }
 
+test_windows_create_task_closes_partial_pane_when_shell_handoff_fails() {
+  local dir log resp fb out status cyglog
+  dir="$TMP_ROOT/create-task-windows-shell-handoff-fails"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; cyglog="$dir/cygpath.log"; : > "$log"; : > "$cyglog"
+  printf '{"result":{"tabs":[]}}\n' > "$resp/1.out"
+  printf '{"result":{"tab":{"tab_id":"w1:t2"},"root_pane":{"pane_id":"w1:p2"}}}\n' > "$resp/2.out"
+  printf '1\n' > "$resp/3.exit"
+  fb=$(make_herdr_fakebin "$dir")
+  add_cygpath_fake "$fb"
+  set +e
+  out=$( PATH="$fb:$PATH" SHELL=/usr/bin/bash FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_CYGPATH_LOG="$cyglog" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-newtask /c/Users/captain/project' "$ROOT" 2>&1 )
+  status=$?
+  set +e
+  [ "$status" -ne 0 ] || fail "create_task should fail when Windows pane run handoff fails"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''run'$'\x1f''w1:p2'$'\x1f''C:\PROGRA~1\Git\usr\bin\bash.exe -l' \
+    "Windows create_task did not attempt the login shell handoff"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''close'$'\x1f''w1:p2' \
+    "Windows create_task did not close the partial task pane after handoff failure"
+  [ -z "$out" ] || fail "create_task shell handoff failure should stay quiet beyond the failing command output, got '$out'"
+  pass "fm_backend_herdr_create_task: closes partial task pane when Windows shell handoff fails"
+}
+
 test_windows_container_ensure_converts_cwd_for_workspace_create() {
   local dir log resp fb out cyglog
   dir="$TMP_ROOT/container-windows-cwd"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; cyglog="$dir/cygpath.log"; : > "$log"; : > "$cyglog"
@@ -2270,6 +2292,7 @@ test_create_task_creates_and_parses_ids
 test_create_task_creates_with_no_focus_flag
 test_create_task_passes_explicit_shell_env
 test_windows_create_task_converts_shell_env_for_tab_create
+test_windows_create_task_closes_partial_pane_when_shell_handoff_fails
 test_windows_create_task_converts_cwd_for_tab_create
 test_posix_create_task_leaves_tab_cwd_byte_identical
 test_workspace_find_matches_only_this_homes_own_label

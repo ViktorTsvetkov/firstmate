@@ -522,6 +522,15 @@ fm_backend_herdr_tab_is_husk() {  # <session> <pane_id>
   esac
 }
 
+fm_backend_herdr_close_partial_task() {  # <session> <tab_id> <pane_id>
+  local session=$1 tab_id=$2 pane_id=$3
+  if [ -n "$pane_id" ]; then
+    fm_backend_herdr_cli "$session" pane close "$pane_id" >/dev/null 2>&1 || true
+  elif [ -n "$tab_id" ]; then
+    fm_backend_herdr_cli "$session" tab close "$tab_id" >/dev/null 2>&1 || true
+  fi
+}
+
 # fm_backend_herdr_create_task: create the task's tab (one pane) in
 # <container> ("session:workspace_id"). Herdr does NOT enforce label
 # uniqueness itself (verified: two tabs can share a label), so the duplicate
@@ -599,10 +608,14 @@ EOF
   pane_id=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
   if [ -z "$tab_id" ] || [ -z "$pane_id" ]; then
     echo "error: could not parse tab/pane id from herdr tab create output" >&2
+    fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
     return 1
   fi
   if [ -n "$shell_arg" ] && fm_platform_is_windows; then
-    fm_backend_herdr_cli "$session" pane run "$pane_id" "$shell_arg -l" >/dev/null 2>&1 || return 1
+    fm_backend_herdr_cli "$session" pane run "$pane_id" "$shell_arg -l" >/dev/null 2>&1 || {
+      fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
+      return 1
+    }
   fi
   [ -z "$seeded_tab_id" ] || fm_backend_herdr_workspace_prune_seeded_default_tab "$session" "$wsid" "$seeded_tab_id"
   if [ -n "$dup_tab_ids" ]; then
@@ -614,10 +627,12 @@ $dup_tab_ids
 EOF
     list=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || {
       echo "error: could not verify herdr husk removal for tab '$label' in workspace $wsid (session $session)" >&2
+      fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
       return 1
     }
     if ! printf '%s' "$list" | jq -e '(.result.tabs | type) == "array"' >/dev/null 2>&1; then
       echo "error: could not parse herdr tab list output for workspace $wsid (session $session)" >&2
+      fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
       return 1
     fi
     remaining_dup_tabs=$(printf '%s' "$list" | jq -r --arg want "$label" --arg replacement "$tab_id" \
@@ -625,6 +640,7 @@ EOF
     remaining_dup_tabs=${remaining_dup_tabs//$'\n'/ }
     if [ -n "$remaining_dup_tabs" ]; then
       echo "error: failed to remove preexisting herdr tab(s) $remaining_dup_tabs for label '$label' in workspace $wsid (session $session)" >&2
+      fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
       return 1
     fi
   fi
