@@ -176,6 +176,7 @@ This mirrors tmux's `session:window` target shape closely enough that normal tas
 Operational commands should prefer a task selector, either `fm-<id>` or the exact `<id>`, which resolves through this home's metadata.
 `fm-send.sh` deliberately refuses unresolved guesses: a raw `herdr_pane_id` without its session prefix is rejected with a hint, an unresolved `fm-<id>` is rejected, and an unrecorded explicit target must be well-formed and live before any key or text is sent.
 An explicit herdr target also works when it exactly matches recorded metadata, or when a live unrecorded endpoint is intentionally targeted as an escape hatch outside this firstmate home.
+For `fm-peek.sh`, that unrecorded escape hatch does not require task metadata for the raw selector, but herdr-shaped three-field targets infer herdr only when herdr is active through `FM_BACKEND=herdr`, `config/backend`, or runtime auto-detection; plain POSIX keeps unmatched explicit targets on the tmux compatibility path.
 
 Herdr tasks additionally record:
 

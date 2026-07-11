@@ -392,7 +392,41 @@ fm_backend_of_selector() {  # <raw-target> <resolved-target> <state-dir>
       *:*:*) printf 'herdr'; return 0 ;;
     esac
   fi
+  if fm_backend_herdr_selector_active && [ -n "$resolved" ]; then
+    case "$resolved" in
+      *:*:*) printf 'herdr'; return 0 ;;
+    esac
+  fi
   printf 'tmux'
+}
+
+# fm_backend_herdr_selector_active: whether an unrecorded explicit target shaped
+# like "<herdr-session>:<workspace>:<pane>" should infer herdr. The check
+# mirrors backend selection's explicit/env/config/runtime-detection layers, but
+# deliberately stops before the platform default so plain POSIX keeps treating
+# unmatched explicit targets as tmux.
+fm_backend_herdr_selector_active() {
+  local line v
+  if [ "${FM_BACKEND:-}" = herdr ]; then
+    return 0
+  fi
+  if [ -n "${FM_BACKEND:-}" ]; then
+    return 1
+  fi
+  if [ -f "$FM_BACKEND_CONFIG_DIR/backend" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      v=$(printf '%s' "$line" | tr -d '[:space:]')
+      if [ -n "$v" ]; then
+        [ "$v" = herdr ]
+        return
+      fi
+    done < "$FM_BACKEND_CONFIG_DIR/backend"
+  fi
+  if fm_backend_detect >/dev/null; then
+    [ "$FM_BACKEND_DETECTED" = herdr ]
+    return
+  fi
+  return 1
 }
 
 fm_backend_expected_label_of_selector() {  # <raw-target> <state-dir>

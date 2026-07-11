@@ -612,6 +612,28 @@ test_backend_of_selector_matches_explicit_target_meta() {
   pass "fm_backend_of_selector: fm-<id> and matching explicit targets inherit metadata backend"
 }
 
+test_backend_of_selector_gates_herdr_shape_on_active_herdr() {
+  local state=$TMP_ROOT/backend-selector-herdr-active-state out
+  mkdir -p "$state"
+
+  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID FM_BACKEND __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" FM_PLATFORM_IS_WINDOWS=no \
+    fm_backend_of_selector 'fm-e2e:wC:p2' 'fm-e2e:wC:p2' "$state")
+  [ "$out" = tmux ] \
+    || fail "plain POSIX must keep routing an unmatched explicit three-field target to tmux, got '$out'"
+
+  out=$(unset TMUX CMUX_WORKSPACE_ID FM_BACKEND __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" FM_PLATFORM_IS_WINDOWS=no HERDR_ENV=1 \
+    fm_backend_of_selector 'fm-e2e:wC:p2' 'fm-e2e:wC:p2' "$state")
+  [ "$out" = herdr ] \
+    || fail "HERDR_ENV=1 should route an unmatched explicit three-field target to herdr, got '$out'"
+
+  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_BACKEND=herdr \
+    fm_backend_of_selector 'fm-e2e:wC:p2' 'fm-e2e:wC:p2' "$state")
+  [ "$out" = herdr ] \
+    || fail "FM_BACKEND=herdr should route an unmatched explicit three-field target to herdr, got '$out'"
+
+  pass "fm_backend_of_selector: explicit herdr-shaped targets infer herdr only when herdr is active; plain POSIX stays tmux"
+}
+
 # --- old vs new: fm-send.sh --------------------------------------------------
 
 make_send_fakebin() {  # <dir> -> echoes fakebin dir; logs every tmux call to $FM_TMUX_LOG
@@ -1030,6 +1052,7 @@ test_backend_capability_declarations
 test_meta_get_and_backend_of_meta
 test_resolve_selector_three_forms
 test_backend_of_selector_matches_explicit_target_meta
+test_backend_of_selector_gates_herdr_shape_on_active_herdr
 test_send_conformance_old_vs_new
 test_peek_conformance_old_vs_new
 test_spawn_conformance_old_vs_new

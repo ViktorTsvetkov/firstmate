@@ -3,6 +3,8 @@
 # Usage: fm-peek.sh <target> [lines=40]
 #   <target> may be a bare firstmate task name (fm-xyz), resolved through
 #   this home's state/<id>.meta, or an explicit backend target.
+#   Unrecorded herdr-shaped explicit targets use herdr only when herdr is the
+#   active runtime backend; otherwise POSIX keeps the tmux compatibility path.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,6 +22,10 @@ T=$(fm_backend_resolve_selector "$RAW_TARGET" "$STATE")
 N=${2:-40}
 
 BACKEND=$(fm_backend_of_selector "$RAW_TARGET" "$T" "$STATE")
-EXPECTED_LABEL=$(fm_backend_expected_label_of_selector "$RAW_TARGET" "$STATE")
+EXPECTED_LABEL=
+case "$BACKEND" in
+  herdr) ;;
+  *) EXPECTED_LABEL=$(fm_backend_expected_label_of_selector "$RAW_TARGET" "$STATE") ;;
+esac
 
 fm_backend_capture "$BACKEND" "$T" "$N" "$EXPECTED_LABEL"
