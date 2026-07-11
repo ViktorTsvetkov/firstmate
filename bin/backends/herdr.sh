@@ -561,6 +561,9 @@ fm_backend_herdr_close_partial_task() {  # <session> <tab_id> <pane_id>
 # This mirrors fm_backend_herdr_workspace_prune_seeded_default_tab's own
 # create-before-close safety argument.
 #
+# If a later create_task check fails after the new tab exists, the partial
+# task pane is closed before returning failure.
+#
 # --no-focus: verified tab create never focuses by default regardless of
 # sibling tabs, so this is defense in depth rather than a behavior change.
 # <seeded_default_tab_id> (4th arg, may be empty) is exactly the value

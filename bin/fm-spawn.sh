@@ -26,6 +26,9 @@
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.
+#   Backends that create endpoints before later spawn assertions complete own
+#   their abort cleanup here; herdr closes its task pane until meta is committed,
+#   and Orca closes its terminal/worktree until the spawn succeeds.
 #   With no harness arg, a crewmate/scout spawn resolves the CREW harness only when
 #   config/crew-dispatch.json is absent. When that file exists, crewmate/scout
 #   spawns require an explicit harness so firstmate cannot silently skip dispatch
