@@ -104,11 +104,13 @@ That keeps spawn launch compatible across claude, codex, grok, pi, and opencode 
 On the herdr backend, a secondmate launch lands in that secondmate home's labeled workspace, and crewmates spawned from that home land in the same workspace.
 When seeded with `-`, the home is a durable treehouse lease under the secondmate id, so it survives with no live process and is not recycled by later `treehouse get` or pruning.
 `fm-home-seed.sh` accepts that leased home only when it is a git worktree from the same git common directory as the active firstmate checkout.
+An explicit secondmate home may be a standalone clone or a plain worktree, marked with `.fm-secondmate-home` rather than tied to a treehouse lease.
 On native Windows, a different-store lease refusal also explains the common standalone-active-home cause and points at the explicit-home path form.
 On native Windows, `fm-home-seed.sh` normalizes drive-letter lease paths before active-home containment checks and records the normalized home path.
 Retirement or seed rollback returns the leased home; normal restart/recovery keeps it leased.
 Seed rollback includes any post-lease validation failure when the acquired home is still a safe git worktree target.
-If returning the lease fails during teardown, firstmate leaves the route and home intact instead of hiding a still-held lease.
+If treehouse reports during teardown that a worktree-shaped home is not managed by treehouse, firstmate treats it as plain non-leased and removes it directly.
+If returning a real lease fails during teardown, firstmate leaves the route and home intact instead of hiding a still-held lease.
 Seeding is transactional: if validation, cloning, initialization, or registry update fails, generated briefs, new homes, new project clones, and registry edits are rolled back.
 `local-only` projects stay with the main first mate because they merge into the main local checkout instead of a remote-backed PR path.
 The same project may appear in multiple secondmate homes when their scopes differ, such as issue triage versus feature development.

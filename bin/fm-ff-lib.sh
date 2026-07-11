@@ -10,14 +10,17 @@
 #     on startup) follows the PRIMARY checkout's current default-branch commit:
 #     base_mode is that local commit, with NO fetch and no origin dependency.
 #
-# Every secondmate home is a worktree of this same repo, so it already holds the
-# primary's commit in the shared object store; the local-HEAD sync is therefore a
-# purely local fast-forward that never touches the network. A tracked-files
-# fast-forward never touches the gitignored operational dirs (data/, state/,
-# config/, projects/, .no-mistakes/), so a secondmate's backlog, projects, and
-# in-flight work are never disturbed. Homes are leased at a detached HEAD on the
-# default branch, so the fast-forward advances HEAD only and never moves the
-# shared default branch or any other worktree's checkout.
+# A secondmate home may be a leased treehouse worktree, a plain worktree, or a
+# standalone clone.
+# Worktree homes already hold the primary's commit in the shared object store;
+# a standalone clone that lacks the target commit is skipped rather than fetched
+# by the local-HEAD sync.
+# A tracked-files fast-forward never touches the gitignored operational dirs
+# (data/, state/, config/, projects/, .no-mistakes/), so a secondmate's backlog,
+# projects, and in-flight work are never disturbed.
+# Worktree homes are kept at a detached HEAD on the default branch, so the
+# fast-forward advances HEAD only and never moves the shared default branch or
+# any other worktree's checkout.
 
 SUB_HOME_MARKER="${SUB_HOME_MARKER:-.fm-secondmate-home}"
 

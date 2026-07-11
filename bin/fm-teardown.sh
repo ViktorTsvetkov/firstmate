@@ -33,10 +33,13 @@
 # Secondmates (kind=secondmate in meta) are retired explicitly. Normal
 # teardown refuses while their home has in-flight crewmate meta files; --force
 # is the approved discard path that prevalidates child removal targets, discards
-# child work, kills child runtime endpoints, and removes the retired home. Removing a
-# leased home releases its durable treehouse lease so the pool slot is freed,
-# never left leased forever. If the treehouse return fails, teardown leaves the
-# leased home and state in place instead of hiding a still-held lease.
+# child work, kills child runtime endpoints, and removes the retired home.
+# Removing a leased home releases its durable treehouse lease so the pool slot
+# is freed, never left leased forever.
+# If treehouse reports that a worktree-shaped home is not managed by treehouse,
+# teardown treats it as a plain non-leased home and removes it directly.
+# Other treehouse return failures leave the home and state in place instead of
+# hiding a still-held lease.
 # Usage: fm-teardown.sh <task-id> [--force]
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks, and discards secondmate child work for kind=secondmate. Only use it
