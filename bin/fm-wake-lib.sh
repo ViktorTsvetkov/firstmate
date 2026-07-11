@@ -52,6 +52,10 @@ fm_pid_alive() {
   kill -0 "$pid" 2>/dev/null
 }
 
+# WINDOWS-ONLY helper for watcher lock identity fields.
+# Native Windows can surface the same checkout as both `C:/...` and `/c/...`
+# during an upgrade or across Git Bash/herdr boundaries; compare those forms as
+# the same watcher owner while POSIX keeps literal byte equality.
 fm_windows_posix_path_form() {
   local path=$1 drive rest
   if command -v cygpath >/dev/null 2>&1; then

@@ -30,9 +30,11 @@
 # On native Windows, Git Bash can expose a shell job pid that differs from the
 # watcher's recorded BASHPID, so the arm reconciles through the pid written by
 # the watcher itself and never kills a live lock holder with a fresh beacon just
-# because the wrapper pid differs. If the child fires before confirmation, this
-# script forwards only the child's stdout; draining state/.wake-queue remains the
-# job of fm-wake-drain.sh and session start.
+# because the wrapper pid differs. The same live-lock check normalizes native
+# Windows drive-letter and MSYS path forms before comparing the recorded home and
+# watcher path, while POSIX keeps literal path equality. If the child fires before
+# confirmation, this script forwards only the child's stdout; draining
+# state/.wake-queue remains the job of fm-wake-drain.sh and session start.
 #
 # --restart: stop ONLY this FM_HOME's watcher (the pid recorded in THIS home's
 # state/.watch.lock) and start a fresh one. It resolves and signals exactly that

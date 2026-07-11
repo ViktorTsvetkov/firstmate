@@ -57,6 +57,7 @@ It also exposes `fm_supervision_status` for callers that need the individual fie
 `bin/fm-turnend-guard.sh` deliberately uses a sharper end-of-turn predicate.
 It first uses `fm_supervision_status` to count in-flight tasks, then requires `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`.
 That shared live-watcher check is the same one used by `bin/fm-watch-arm.sh`: the recorded `state/.watch.lock/pid` must name a live process, the lock's recorded home/path/pid-identity must match the current live pid, and `state/.last-watcher-beat` must still be within `FM_GUARD_GRACE`.
+On native Windows, the recorded home and watcher path match across drive-letter and MSYS path forms; on POSIX, those path comparisons stay literal.
 This means a just-exited watcher with a fresh leftover beacon still blocks the Stop hook immediately, while a live but wedged watcher with an ancient beacon also blocks.
 
 ## Scoping to the PRIMARY only
