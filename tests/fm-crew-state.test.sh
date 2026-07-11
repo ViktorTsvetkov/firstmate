@@ -617,11 +617,11 @@ test_bom_prefixed_done_status_uses_log() {
   printf '\357\273\277done: Windows PowerShell status\n' > "$d/state/feat-bom.status"
   FM_FAKE_AXI_STATUS=""
   FM_FAKE_BUSY=0
-  local out; out=$(FM_PLATFORM_IS_WINDOWS=yes run_crew_state "$d" feat-bom)
+  local out; out=$(FM_PLATFORM_IS_WINDOWS=no run_crew_state "$d" feat-bom)
   assert_contains "$out" "state: done" "BOM-prefixed done log -> done"
   assert_contains "$out" "source: status-log" "BOM-prefixed done log -> status-log source"
   assert_contains "$out" "Windows PowerShell status" "BOM-prefixed done detail preserved"
-  pass "BOM-prefixed done status uses the shared normalized status-log reader"
+  pass "BOM-prefixed done status uses the shared normalized status-log reader on POSIX"
 }
 
 test_dead_window_ignores_stale_status_log() {

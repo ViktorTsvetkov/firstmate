@@ -81,34 +81,42 @@ decode_status_file_utf16() {  # <encoding> <file>
   return 1
 }
 
+strip_status_line_bom() {  # <line>
+  local line=$1
+  case "$line" in
+    $'\xef\xbb\xbf'*) line=${line#$'\xef\xbb\xbf'} ;;
+  esac
+  printf '%s' "$line"
+}
+
 # Return the last non-blank line of a status file (empty if missing/blank).
-# On native Windows, strip only a genuine leading UTF-8 BOM, which PowerShell 5.1
-# can write on the first line of a newly-created status log, and decode UTF-16
-# only when the file's bytes prove it by BOM or by a null-byte code-unit pattern.
-# On POSIX, keep the historical plain grep/tail read path byte-identical.
+# Strip only a genuine leading UTF-8 BOM, which native-Windows status appends can
+# write on the first line of a newly-created status log, and decode UTF-16 only
+# when the file's bytes prove it by BOM or by a null-byte code-unit pattern on
+# Windows. BOM-less POSIX lines stay byte-identical.
 last_status_line() {
   local f=$1
   [ -e "$f" ] || return 0
+  local line
   if fm_platform_is_windows; then
-    local line enc
+    local enc
     enc=$(status_file_utf16_encoding "$f")
     if [ -n "$enc" ]; then
       line=$(decode_status_file_utf16 "$enc" "$f" | grep -v '^[[:space:]]*$' | tail -1)
     else
       line=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1)
     fi
-    case "$line" in
-      $'\xef\xbb\xbf'*) line=${line#$'\xef\xbb\xbf'} ;;
-    esac
-    printf '%s\n' "$line"
+    printf '%s\n' "$(strip_status_line_bom "$line")"
     return 0
   fi
-  grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1
+  line=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1)
+  printf '%s\n' "$(strip_status_line_bom "$line")"
 }
 
 # 0 if the given (last) status line matches a captain-relevant verb.
 status_is_captain_relevant() {
-  local line=$1
+  local line
+  line=$(strip_status_line_bom "$1")
   [ -n "$line" ] || return 1
   printf '%s' "$line" | grep -qiE "${FM_CAPTAIN_RE:-$FM_CLASSIFY_CAPTAIN_RE_DEFAULT}"
 }
