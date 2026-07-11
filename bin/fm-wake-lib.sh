@@ -52,6 +52,36 @@ fm_pid_alive() {
   kill -0 "$pid" 2>/dev/null
 }
 
+fm_windows_posix_path_form() {
+  local path=$1 drive rest
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$path" 2>/dev/null && return 0
+  fi
+  case "$path" in
+    [A-Za-z]:/*)
+      drive=$(printf '%s' "${path%%:*}" | tr '[:upper:]' '[:lower:]')
+      rest=${path#?:/}
+      printf '/%s/%s\n' "$drive" "$rest"
+      ;;
+    [A-Za-z]:\\*)
+      drive=$(printf '%s' "${path%%:*}" | tr '[:upper:]' '[:lower:]')
+      rest=${path#?:\\}
+      rest=${rest//\\//}
+      printf '/%s/%s\n' "$drive" "$rest"
+      ;;
+    *) printf '%s\n' "$path" ;;
+  esac
+}
+
+fm_watcher_lock_same_path() {
+  local left=$1 right=$2
+  if fm_is_windows; then
+    left=$(fm_windows_posix_path_form "$left") || return 1
+    right=$(fm_windows_posix_path_form "$right") || return 1
+  fi
+  [ "$left" = "$right" ]
+}
+
 fm_pid_identity() {
   local pid=$1 out
   case "$pid" in
@@ -111,8 +141,8 @@ fm_watcher_lock_matches_pid() {
   lock_home=$(cat "$lockdir/fm-home" 2>/dev/null || true)
   lock_path=$(cat "$lockdir/watcher-path" 2>/dev/null || true)
   lock_identity=$(cat "$lockdir/pid-identity" 2>/dev/null || true)
-  [ "$lock_home" = "$home" ] || return 1
-  [ "$lock_path" = "$watch_path" ] || return 1
+  fm_watcher_lock_same_path "$lock_home" "$home" || return 1
+  fm_watcher_lock_same_path "$lock_path" "$watch_path" || return 1
   [ -n "$lock_identity" ] || return 1
   current_identity=$(fm_pid_identity "$pid") || return 1
   [ "$current_identity" = "$lock_identity" ]

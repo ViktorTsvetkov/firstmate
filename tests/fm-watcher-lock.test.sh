@@ -972,6 +972,87 @@ test_arm_fails_loud_when_no_fresh_watcher_confirmable() {
   pass "arm reports FAILED and exits non-zero when no fresh watcher can be confirmed"
 }
 
+write_live_watcher_lock() {  # <state> <home> <watch-path> <pid>
+  local state=$1 home=$2 watch_path=$3 pid=$4
+  mkdir -p "$state/.watch.lock"
+  printf '%s\n' "$pid" > "$state/.watch.lock/pid"
+  printf '%s\n' "$home" > "$state/.watch.lock/fm-home"
+  printf '%s\n' "$watch_path" > "$state/.watch.lock/watcher-path"
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_pid_identity "$2"
+  ' _ "$LIB" "$pid" > "$state/.watch.lock/pid-identity"
+  touch "$state/.last-watcher-beat"
+}
+
+test_windows_watcher_lock_matches_drive_and_msys_path_forms() {
+  local dir state live
+  dir=$(make_case windows-watch-path-forms)
+  state="$dir/state"
+  sleep 300 &
+  live=$!
+  write_live_watcher_lock "$state" "C:/Users/captain/fleet" "C:/Users/captain/fleet/bin/fm-watch.sh" "$live"
+  FM_PLATFORM_IS_WINDOWS=yes FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_watcher_lock_matches_pid "$2" "/c/Users/captain/fleet/bin/fm-watch.sh" "$3" "/c/Users/captain/fleet"
+  ' _ "$LIB" "$state" "$live" || {
+    kill "$live" 2>/dev/null || true
+    wait "$live" 2>/dev/null || true
+    fail "Windows watcher lock treated C:/Users and /c/Users forms as different paths"
+  }
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  pass "Windows watcher lock matches drive-letter and MSYS path forms"
+}
+
+test_windows_watcher_rollout_keeps_other_form_lock_healthy() {
+  local dir state live
+  dir=$(make_case windows-watch-path-rollout)
+  state="$dir/state"
+  sleep 300 &
+  live=$!
+  write_live_watcher_lock "$state" "/c/Users/captain/fleet" "/c/Users/captain/fleet/bin/fm-watch.sh" "$live"
+  FM_PLATFORM_IS_WINDOWS=yes FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_watcher_healthy "$2" "C:/Users/captain/fleet/bin/fm-watch.sh" 300 "C:/Users/captain/fleet"
+  ' _ "$LIB" "$state" || {
+    kill "$live" 2>/dev/null || true
+    wait "$live" 2>/dev/null || true
+    fail "Windows rollout did not accept an already-recorded other-form watcher lock"
+  }
+  is_live_non_zombie "$live" || fail "Windows rollout health check killed the recorded watcher"
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  pass "Windows rollout keeps an already-recorded other-form watcher lock healthy"
+}
+
+test_posix_watcher_lock_path_compare_stays_literal() {
+  local dir state fakebin cyglog live status
+  dir=$(make_case posix-watch-path-literal)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  cyglog="$dir/cygpath.log"
+  sleep 300 &
+  live=$!
+  write_live_watcher_lock "$state" "C:/Users/captain/fleet" "C:/Users/captain/fleet/bin/fm-watch.sh" "$live"
+  cat > "$fakebin/cygpath" <<'SH'
+#!/usr/bin/env bash
+printf 'called\n' >> "${FM_CYGPATH_LOG:?}"
+printf '%s\n' "$2"
+SH
+  chmod +x "$fakebin/cygpath"
+  status=0
+  PATH="$fakebin:$PATH" FM_CYGPATH_LOG="$cyglog" FM_PLATFORM_IS_WINDOWS=no FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_watcher_lock_matches_pid "$2" "/c/Users/captain/fleet/bin/fm-watch.sh" "$3" "/c/Users/captain/fleet"
+  ' _ "$LIB" "$state" "$live" || status=$?
+  [ "$status" -ne 0 ] || fail "POSIX watcher lock comparison normalized paths that should remain literal"
+  [ ! -s "$cyglog" ] || fail "POSIX watcher lock comparison called cygpath"
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  pass "POSIX watcher lock path comparison stays literal and never calls cygpath"
+}
+
 test_singleton_start
 test_stale_watch_lock_reclaimed
 test_live_stale_watch_lock_is_actionable
@@ -998,3 +1079,6 @@ test_windows_arm_does_not_orphan_child_when_peer_timeout_wins
 test_windows_arm_waits_for_slow_first_beacon
 test_windows_herdr_poll_refreshes_beacon_between_slow_reads
 test_arm_fails_loud_when_no_fresh_watcher_confirmable
+test_windows_watcher_lock_matches_drive_and_msys_path_forms
+test_windows_watcher_rollout_keeps_other_form_lock_healthy
+test_posix_watcher_lock_path_compare_stays_literal
