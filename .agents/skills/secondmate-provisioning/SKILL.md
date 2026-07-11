@@ -58,6 +58,7 @@ The lease survives with no live process and is never recycled by later `treehous
 The slot stays reserved across restarts until the lease is released.
 Release happens only on explicit retirement or seed rollback, never on routine restart or recovery.
 `bin/fm-home-seed.sh` accepts a treehouse-leased home only when it is a git worktree backed by the same git common directory as the active firstmate checkout.
+An explicit home path may be a standalone clone or a plain worktree; it is marked with `.fm-secondmate-home` either way.
 If the lease comes from another backing store, seeding refuses it and returns the lease.
 On native Windows, that refusal also explains the common standalone-active-home cause and points at the explicit-home path form: `bin/fm-home-seed.sh <id> <home-path> <project>...`.
 On native Windows, `fm-home-seed.sh` normalizes a drive-letter treehouse lease path before the active-home safety check and before recording the home, so a valid external lease is not misread as inside the active home.
@@ -151,8 +152,9 @@ The safety check is the secondmate's own home.
 Teardown refuses while its `state/*.meta` contains in-flight work.
 When safe, teardown kills the direct tmux window, removes the `data/secondmates.md` route, clears the main home metadata, and removes the retired secondmate home.
 Removing a leased home releases its durable treehouse lease via `treehouse return`, so the pool slot is freed for reuse rather than left leased forever.
-A plain-clone home with no pool slot is simply removed.
-If `treehouse return` fails for a leased home, teardown stops with state intact rather than raw-removing the directory and hiding a held lease.
+A plain non-leased home with no pool slot is simply removed, whether it is a standalone clone or a worktree.
+If treehouse reports that a worktree-shaped home is not managed by treehouse, teardown treats it as plain non-leased and removes it directly.
+Other `treehouse return` failures stop with state intact rather than raw-removing the directory and hiding a held lease.
 
 With `--force`, teardown is the explicit discard path.
 It kills child windows, discards child work and state inside the secondmate home, removes the route, releases the lease, and removes the retired secondmate home.
