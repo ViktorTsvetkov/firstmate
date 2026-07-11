@@ -1173,6 +1173,63 @@ EOF
   pass "secondmate teardown raw-removes plain-clone homes"
 }
 
+test_secondmate_teardown_removes_plain_worktree_home_when_treehouse_reports_unmanaged() {
+  local home subhome subhome_abs fakebin log fmroot
+  home="$TMP_ROOT/plain-worktree-teardown-home"
+  subhome="$TMP_ROOT/plain-worktree-teardown-subhome"
+  fmroot="$TMP_ROOT/plain-worktree-teardown-fmroot"
+  make_firstmate_git_root "$fmroot"
+  git -C "$fmroot" worktree add --quiet --detach "$subhome" HEAD
+  mkdir -p "$home/state" "$home/data" "$subhome/state"
+  printf 'domain\n' > "$subhome/.fm-secondmate-home"
+  subhome_abs=$(cd "$subhome" && pwd -P)
+  cat > "$home/state/domain.meta" <<EOF
+window=firstmate:fm-domain
+worktree=$subhome
+project=$subhome
+harness=echo
+kind=secondmate
+mode=secondmate
+yolo=off
+home=$subhome
+projects=alpha
+EOF
+  printf '%s\n' '- domain - design domain (home: '"$subhome"'; scope: design domain; projects: alpha; added 2026-06-22)' > "$home/data/secondmates.md"
+  fakebin=$(make_fake_tmux "$TMP_ROOT/plain-worktree-teardown-fake")
+  log="$TMP_ROOT/plain-worktree-teardown-fake/tmux.log"
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf 'treehouse %s\n' "$*" >> "${FM_FAKE_TMUX_LOG:-/dev/null}"
+case "${1:-}" in
+  return)
+    shift
+    target=
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --force) ;;
+        *) target=$1 ;;
+      esac
+      shift
+    done
+    echo "worktree $target is not managed by treehouse" >&2
+    exit 17
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/treehouse"
+
+  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/plain-worktree-teardown-fake/pane.txt" \
+    "$ROOT/bin/fm-teardown.sh" domain >/dev/null 2>/dev/null \
+    || fail "teardown failed for unmanaged plain-worktree secondmate home"
+  grep -F "treehouse return --force $subhome_abs" "$log" >/dev/null || fail "teardown did not probe the registered plain-worktree home through treehouse"
+  [ ! -d "$subhome" ] || fail "teardown did not remove the unmanaged plain-worktree secondmate home"
+  [ ! -e "$home/state/domain.meta" ] || fail "teardown did not clear parent meta for unmanaged plain-worktree home"
+  grep -F -- '- domain ' "$home/data/secondmates.md" >/dev/null && fail "teardown did not remove unmanaged plain-worktree registry route"
+  pass "secondmate teardown raw-removes plain-worktree homes reported unmanaged by treehouse"
+}
+
 test_secondmate_force_teardown_discards_child_work() {
   local home subhome childproj childwt fakebin log
   home="$TMP_ROOT/force-teardown-home"
@@ -1919,6 +1976,7 @@ test_fm_send_refuses_bare_window_without_home_meta
 test_secondmate_teardown_retires_empty_home
 test_secondmate_teardown_refuses_failed_leased_home_return
 test_secondmate_teardown_removes_plain_clone_home_without_treehouse_return
+test_secondmate_teardown_removes_plain_worktree_home_when_treehouse_reports_unmanaged
 test_secondmate_force_teardown_discards_child_work
 test_secondmate_force_teardown_preserves_child_on_unproven_lock
 test_secondmate_force_teardown_allows_operational_dir_symlinks_inside_home

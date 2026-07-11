@@ -99,12 +99,15 @@ Persistent secondmate routes live locally in `data/secondmates.md`.
 Each line records the secondmate id, charter summary, absolute home path, natural-language scope, project clone list, and added date; `fm-home-seed.sh validate` refuses duplicate ids, duplicate homes, and nested or overlapping homes.
 The main first mate routes by reading those scopes with judgment; the project list is provisioning data, not exclusive ownership.
 Use `fm-home-seed.sh <id> - <project>...` to lease a fresh firstmate worktree for the secondmate home.
+An explicit `<home-path>` may instead name or create a plain non-leased home, including a standalone clone or a worktree.
 The lease is held under the secondmate id until explicit retirement or seed rollback returns it, so normal restarts do not free or recycle the home.
 The leased home must be a git worktree backed by the same git common directory as the active firstmate checkout; a mismatched lease is refused and returned.
 On native Windows, that refusal also explains the common standalone-active-home cause and points at the explicit-home path form: `fm-home-seed.sh <id> <home-path> <project>...`.
 On native Windows, drive-letter paths returned by `treehouse get --lease` are normalized before active-home containment checks and before the route is recorded.
 Any post-lease validation failure returns the acquired lease when the rollback target is still safe and still a git worktree.
-Teardown of a leased home fails closed if `treehouse return` cannot release the lease; plain-clone homes with no treehouse pool slot are removed directly.
+Teardown of a leased home fails closed if `treehouse return` cannot release the lease.
+If treehouse reports that a worktree-shaped home is not managed by treehouse, teardown treats it as a plain non-leased home and removes it directly.
+Plain non-leased homes with no treehouse pool slot are removed directly whether they are standalone clones or worktrees.
 Secondmate routes cover `no-mistakes` and `direct-PR` projects; `local-only` projects remain main-firstmate work.
 For `no-mistakes` projects, seeding initializes only projects newly cloned into a secondmate home and refuses to mutate a preexisting clone that is not already initialized.
 After creating a secondmate, move existing main-backlog items that you have judged in-scope with `fm-backlog-handoff.sh <secondmate-id> <item-key>...`; it is idempotent and refuses in-flight items or non-secondmate homes.
