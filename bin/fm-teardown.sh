@@ -939,7 +939,7 @@ EOF
 }
 
 remove_firstmate_home() {
-  local home=$1 label=$2 expected_id=${3:-} abs_home_path
+  local home=$1 label=$2 expected_id=${3:-} abs_home_path return_err return_rc
   [ -n "$home" ] || return 0
   [ -e "$home" ] || return 0
   abs_home_path=$(validate_firstmate_home_for_removal "$home" "$label" "$expected_id") || return 1
@@ -949,11 +949,21 @@ remove_firstmate_home() {
       echo "error: treehouse command not found; cannot return $label $abs_home_path" >&2
       return 1
     }
-    teardown_treehouse_return "$abs_home_path" "$FM_ROOT" "$label" || {
-      echo "error: treehouse return failed for $label $abs_home_path; lease may still be held" >&2
-      return 1
-    }
-    return 0
+    return_err=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-treehouse-return.XXXXXX") || return 1
+    if teardown_treehouse_return "$abs_home_path" "$FM_ROOT" "$label" 2>"$return_err"; then
+      rm -f "$return_err"
+      return 0
+    fi
+    return_rc=$?
+    cat "$return_err" >&2
+    if [ "$return_rc" -ne "$TEARDOWN_TREEHOUSE_LOCK_REFUSED" ] && grep -F 'not managed by treehouse' "$return_err" >/dev/null; then
+      rm -f "$return_err"
+      safe_rm_rf "$abs_home_path" "$label"
+      return $?
+    fi
+    rm -f "$return_err"
+    echo "error: treehouse return failed for $label $abs_home_path; lease may still be held" >&2
+    return 1
   fi
   safe_rm_rf "$abs_home_path" "$label"
 }
