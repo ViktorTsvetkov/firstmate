@@ -236,21 +236,38 @@ fm_backend_herdr_windows_strip_cr() {
   fi
 }
 
+fm_backend_herdr_server_ready() {  # <session>
+  local session=$1 status running compatible restart_needed
+  status=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null) || return 1
+  running=$(printf '%s' "$status" | jq -r '.server.running // false' 2>/dev/null)
+  running=$(printf '%s' "$running" | fm_backend_herdr_windows_strip_cr)
+  [ "$running" = "true" ] || return 1
+  compatible=$(printf '%s' "$status" | jq -r '.server.compatible // empty' 2>/dev/null)
+  compatible=$(printf '%s' "$compatible" | fm_backend_herdr_windows_strip_cr)
+  restart_needed=$(printf '%s' "$status" | jq -r '.server.restart_needed // false' 2>/dev/null)
+  restart_needed=$(printf '%s' "$restart_needed" | fm_backend_herdr_windows_strip_cr)
+  if [ "$compatible" = "false" ] || [ "$restart_needed" = "true" ]; then
+    echo "error: herdr server for session '$session' is running an incompatible protocol (restart required after a herdr update); firstmate will not drive a stale server" >&2
+    return 2
+  fi
+  return 0
+}
+
 # fm_backend_herdr_server_ensure: start the herdr server for <session>
 # headless (no TUI client) if not already running, mirroring tmux's `tmux
 # has-session || tmux new-session -d`. Verified: a bare socket CLI call does
 # NOT auto-start the server, so this must run before any workspace/tab/pane
 # call. Bounded poll for the server to report running.
 fm_backend_herdr_server_ensure() {  # <session>
-  local session=$1 running out i
-  running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
-  running=$(printf '%s' "$running" | fm_backend_herdr_windows_strip_cr)
-  [ "$running" = "true" ] && return 0
+  local session=$1 i ready_status
+  fm_backend_herdr_server_ready "$session"; ready_status=$?
+  [ "$ready_status" -eq 0 ] && return 0
+  [ "$ready_status" -eq 2 ] && return 1
   fm_backend_herdr_server_start "$session" || return 1
   for i in $(seq 1 20); do
-    running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
-    running=$(printf '%s' "$running" | fm_backend_herdr_windows_strip_cr)
-    [ "$running" = "true" ] && return 0
+    fm_backend_herdr_server_ready "$session"; ready_status=$?
+    [ "$ready_status" -eq 0 ] && return 0
+    [ "$ready_status" -eq 2 ] && return 1
     sleep 0.5
   done
   echo "error: herdr server for session '$session' did not report running within 10s" >&2
