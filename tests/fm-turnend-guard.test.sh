@@ -96,6 +96,7 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard.sh"
   cp "$ROOT/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-turnend-guard-grok.sh"
   cp "$ROOT/bin/fm-supervision-instructions.sh" "$dir/bin/fm-supervision-instructions.sh"
+  cp "$ROOT/bin/fm-afk-start.sh" "$dir/bin/fm-afk-start.sh"
   cp "$ROOT/bin/fm-harness.sh" "$dir/bin/fm-harness.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
@@ -172,6 +173,14 @@ record_watcher_lock() {
   printf '%s\n' "$root" > "$dir/state/.watch.lock/fm-home"
   printf '%s\n' "$bin_dir/fm-watch.sh" > "$dir/state/.watch.lock/watcher-path"
   printf '%s\n' "$identity" > "$dir/state/.watch.lock/pid-identity"
+}
+
+record_supervise_daemon_lock() {
+  local dir=$1 pid=$2 identity=$3
+  mkdir -p "$dir/state/.supervise-daemon.lock"
+  printf '%s\n' "$pid" > "$dir/state/.supervise-daemon.lock/pid"
+  printf '%s\n' "$identity" > "$dir/state/.supervise-daemon.lock/pid-identity"
+  printf '%s\n' "$pid" > "$dir/state/.supervise-daemon.pid"
 }
 
 test_hook_silent_when_no_work_in_flight() {
@@ -258,6 +267,28 @@ test_hook_blocks_when_unhealthy_in_primary() {
   assert_contains "$out" "$REQUIRED_REASON" "block reason must contain the exact required instruction"
   assert_contains "$out" "TURN WOULD END BLIND" "block banner must read as an alarm"
   pass "fm-turnend-guard: blocks with the exact required reason in the primary when unhealthy"
+}
+
+test_hook_silent_during_afk_with_live_daemon_and_fresh_beacon() {
+  local dir identity out pid status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-afk-live-daemon")
+  : > "$dir/state/task1.meta"
+  date '+%s' > "$dir/state/.afk"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "could not identify live daemon holder"
+  }
+  record_supervise_daemon_lock "$dir" "$pid" "$identity"
+  touch "$dir/state/.last-watcher-beat"
+  out=$(run_hook "$dir" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "hook must exit 0 while afk is supervised by a live daemon with a fresh beacon"
+  [ -z "$out" ] || fail "hook produced output during healthy afk supervision: $out"
+  pass "fm-turnend-guard: silent no-op during afk with live supervise-daemon and fresh beacon"
 }
 
 test_hook_blocks_from_fm_home_state() {
@@ -731,6 +762,7 @@ test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
 test_hook_blocks_with_live_lock_and_stale_beacon
 test_hook_blocks_when_unhealthy_in_primary
+test_hook_silent_during_afk_with_live_daemon_and_fresh_beacon
 test_hook_blocks_from_fm_home_state
 test_hook_x_mode_reason_sources_cadence
 test_hook_ignores_repo_state_when_fm_home_set

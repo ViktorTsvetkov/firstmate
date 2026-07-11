@@ -605,6 +605,14 @@ trap 'fm_lock_release "$WATCH_LOCK"' EXIT
 # ${BASHPID:-$$} from this same main shell). Read directly, never via a command
 # substitution, so it matches the stored holder pid for the self-eviction check.
 WATCHER_PID=${BASHPID:-$$}
+if fm_platform_is_windows; then
+  # Git Bash can surface a wrapper pid in the mkdir lock; the singleton holder
+  # is this main watcher process.
+  printf '%s\n' "$WATCHER_PID" > "$WATCH_LOCK/pid" || true
+fi
+if fm_platform_is_windows && [ -n "${FM_WATCH_ARM_CHILD_PID_FILE:-}" ]; then
+  printf '%s\n' "$WATCHER_PID" > "$FM_WATCH_ARM_CHILD_PID_FILE" 2>/dev/null || true
+fi
 printf '%s\n' "$FM_HOME" > "$WATCH_LOCK/fm-home" || true
 printf '%s\n' "$WATCH_PATH" > "$WATCH_LOCK/watcher-path" || true
 fm_pid_identity "$WATCHER_PID" > "$WATCH_LOCK/pid-identity" 2>/dev/null || true

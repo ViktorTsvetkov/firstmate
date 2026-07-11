@@ -478,7 +478,7 @@ test_watch_restart_reports_healthy_peer_without_attaching() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   out="$dir/restart.out"
-  node -e 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 300000)' &
+  bash -c 'trap "" TERM; while :; do sleep 300; done' &
   peer=$!
   identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer") || fail "could not identify peer pid"
   mkdir "$state/.watch.lock"
@@ -510,11 +510,12 @@ test_watcher_self_evicts_on_lock_takeover() {
   pid=$!
   i=0
   while [ "$i" -lt 50 ]; do
-    [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$pid" ] && break
+    [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$pid" ] && [ -e "$state/.last-watcher-beat" ] && break
     sleep 0.1
     i=$((i + 1))
   done
   [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$pid" ] || fail "watcher did not record its own pid in the lock"
+  [ -e "$state/.last-watcher-beat" ] || fail "watcher did not enter its poll loop before lock takeover"
   # Simulate a second watcher taking over the singleton lock. $$ (the test
   # runner) is a live pid that is not the watcher.
   printf '%s\n' "$$" > "$state/.watch.lock/pid"
@@ -639,6 +640,43 @@ test_arm_hup_cleans_child_and_temp_output() {
   pass "arm cleans child watcher and temp output on HUP"
 }
 
+test_windows_arm_waits_for_slow_first_beacon() {
+  local dir state fakebin real_touch armout armpid i lock_pid
+  dir=$(make_case arm-windows-slow-first-beacon)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  real_touch=$(command -v touch) || fail "touch not found"
+  armout="$dir/arm.out"
+  cat > "$fakebin/touch" <<SH
+#!/usr/bin/env bash
+set -u
+case " \${*:-} " in
+  *".last-watcher-beat"*) sleep "\${FM_FAKE_SLOW_BEAT_SLEEP:-0}" ;;
+esac
+exec "$real_touch" "\$@"
+SH
+  chmod +x "$fakebin/touch"
+  PATH="$fakebin:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_FAKE_SLOW_BEAT_SLEEP=12 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 180 ]; do
+    grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
+    ! kill -0 "$armpid" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF 'watcher: started pid=' "$armout" || fail "Windows arm did not wait for a slow first beacon: $(cat "$armout" 2>/dev/null || true)"
+  ! grep -qF 'watcher: FAILED' "$armout" || fail "Windows arm reported FAILED before the slow first beacon landed"
+  lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  grep -F "watcher: started pid=$lock_pid (beacon fresh)" "$armout" >/dev/null \
+    || fail "Windows arm did not report the confirmed live watcher (lock '$lock_pid')"
+  is_live_non_zombie "$lock_pid" || fail "Windows arm confirmed a watcher that did not survive"
+  kill "$armpid" "$lock_pid" 2>/dev/null || true
+  wait "$armpid" 2>/dev/null || true
+  pass "Windows arm waits long enough for a slow first watcher beacon"
+}
+
 test_arm_propagates_immediate_wake_before_confirmation() {
   local dir state fakebin armout drain_out check_file rc
   dir=$(make_case arm-immediate-wake)
@@ -731,6 +769,66 @@ test_arm_fails_loud_when_no_fresh_watcher_confirmable() {
   pass "arm reports FAILED and exits non-zero when no fresh watcher can be confirmed"
 }
 
+write_live_watcher_lock() {  # <state> <home> <watch-path> <pid>
+  local state=$1 home=$2 watch_path=$3 pid=$4
+  mkdir -p "$state/.watch.lock"
+  printf '%s\n' "$pid" > "$state/.watch.lock/pid"
+  printf '%s\n' "$home" > "$state/.watch.lock/fm-home"
+  printf '%s\n' "$watch_path" > "$state/.watch.lock/watcher-path"
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_pid_identity "$2"
+  ' _ "$LIB" "$pid" > "$state/.watch.lock/pid-identity"
+  touch "$state/.last-watcher-beat"
+}
+
+test_windows_watcher_lock_matches_drive_and_msys_path_forms() {
+  local dir state live
+  dir=$(make_case windows-watch-path-forms)
+  state="$dir/state"
+  sleep 300 &
+  live=$!
+  write_live_watcher_lock "$state" "C:/Users/captain/fleet" "C:/Users/captain/fleet/bin/fm-watch.sh" "$live"
+  FM_PLATFORM_IS_WINDOWS=yes FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_watcher_lock_matches_pid "$2" "/c/Users/captain/fleet/bin/fm-watch.sh" "$3" "/c/Users/captain/fleet"
+  ' _ "$LIB" "$state" "$live" || {
+    kill "$live" 2>/dev/null || true
+    wait "$live" 2>/dev/null || true
+    fail "Windows watcher lock treated C:/Users and /c/Users forms as different paths"
+  }
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  pass "Windows watcher lock matches drive-letter and MSYS path forms"
+}
+
+test_posix_watcher_lock_path_compare_stays_literal() {
+  local dir state fakebin cyglog live status
+  dir=$(make_case posix-watch-path-literal)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  cyglog="$dir/cygpath.log"
+  sleep 300 &
+  live=$!
+  write_live_watcher_lock "$state" "C:/Users/captain/fleet" "C:/Users/captain/fleet/bin/fm-watch.sh" "$live"
+  cat > "$fakebin/cygpath" <<'SH'
+#!/usr/bin/env bash
+printf 'called\n' >> "${FM_CYGPATH_LOG:?}"
+printf '%s\n' "$2"
+SH
+  chmod +x "$fakebin/cygpath"
+  status=0
+  PATH="$fakebin:$PATH" FM_CYGPATH_LOG="$cyglog" FM_PLATFORM_IS_WINDOWS=no FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_watcher_lock_matches_pid "$2" "/c/Users/captain/fleet/bin/fm-watch.sh" "$3" "/c/Users/captain/fleet"
+  ' _ "$LIB" "$state" "$live" || status=$?
+  [ "$status" -ne 0 ] || fail "POSIX watcher lock comparison normalized paths that should remain literal"
+  [ ! -s "$cyglog" ] || fail "POSIX watcher lock comparison called cygpath"
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  pass "POSIX watcher lock path comparison stays literal and never calls cygpath"
+}
+
 test_pid_identity_is_locale_invariant() {
   # The watcher records its process identity under one locale; arm/guard/turn-end
   # re-read it under the machine's ambient locale. ps's lstart date format follows
@@ -773,6 +871,9 @@ test_watcher_self_evicts_on_lock_takeover
 test_arm_attaches_and_waits_for_live_fresh_watcher
 test_arm_starts_and_self_heals
 test_arm_hup_cleans_child_and_temp_output
+test_windows_arm_waits_for_slow_first_beacon
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down
 test_arm_fails_loud_when_no_fresh_watcher_confirmable
+test_windows_watcher_lock_matches_drive_and_msys_path_forms
+test_posix_watcher_lock_path_compare_stays_literal

@@ -9,6 +9,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$REPO_ROOT}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 DOC_DIR="$REPO_ROOT/docs/supervision-protocols"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 HARNESS=
 READ_ONLY=0
@@ -120,6 +121,11 @@ repair_line() {
     return 0
   fi
   if [ "$AFK" -eq 1 ]; then
+    # If away mode is actively supervised by a fresh daemon, there is nothing
+    # for the turn-end guard to repair.
+    if afk_supervision_healthy; then
+      return 1
+    fi
     printf '%s\n' 'Away mode owns watcher supervision; load /afk and ensure the daemon is running instead of starting normal supervision directly.'
     return 0
   fi
@@ -154,9 +160,54 @@ repair_line() {
   esac
 }
 
+daemon_lock_owner() {
+  local lock=$1 owner
+  if [ -L "$lock" ]; then
+    owner=$(readlink "$lock" 2>/dev/null) || return 1
+    [ -n "$owner" ] || return 1
+    case "$owner" in
+      /*) printf '%s\n' "$owner" ;;
+      *) printf '%s/%s\n' "$(dirname "$lock")" "$owner" ;;
+    esac
+    return 0
+  fi
+  [ -d "$lock" ] || return 1
+  printf '%s\n' "$lock"
+}
+
+daemon_pid_matches() {
+  local pid=$1 owner=$2 identity current command daemon
+  daemon="$SCRIPT_DIR/fm-supervise-daemon.sh"
+  identity=$(cat "$owner/pid-identity" 2>/dev/null || true)
+  if [ -n "$identity" ]; then
+    current=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" bash -c '. "$1"; fm_pid_identity "$2"' _ "$SCRIPT_DIR/fm-wake-lib.sh" "$pid") || return 1
+    [ "$current" = "$identity" ]
+    return
+  fi
+  command=$(ps -p "$pid" -o command= 2>/dev/null || true)
+  case "$command" in
+    *"$daemon"*|*"fm-supervise-daemon.sh"*) return 0 ;;
+  esac
+  return 1
+}
+
+afk_supervision_healthy() {
+  local lock owner pid beat
+  lock="$STATE/.supervise-daemon.lock"
+  beat="$STATE/.last-watcher-beat"
+  owner=$(daemon_lock_owner "$lock") || return 1
+  pid=$(cat "$owner/pid" 2>/dev/null || true)
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  daemon_pid_matches "$pid" "$owner" || return 1
+  [ "$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" bash -c '. "$1"; fm_path_age "$2"' _ "$SCRIPT_DIR/fm-wake-lib.sh" "$beat")" -lt "${FM_GUARD_GRACE:-300}" ]
+}
+
 if [ "$REPAIR_LINE" -eq 1 ]; then
   repair_line
-  exit 0
+  exit "$?"
 fi
 
 RULE='================================================================================'

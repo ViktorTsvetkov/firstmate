@@ -186,13 +186,15 @@ run_spawn() {
 }
 
 test_spawn_isolation_abort() {
-  local home proj fakebin out status
+  local home proj other fakebin out status
   home="$TMP_ROOT/spawn-home"
   mkdir -p "$home/data"
   proj=$(make_repo "$TMP_ROOT/spawn-proj")
+  other=$(make_repo "$TMP_ROOT/spawn-other")
   fakebin=$(make_spawn_fakebin "$TMP_ROOT/spawn-fake")
   # A genuine isolated linked worktree of the project, detached on the default.
   git -C "$proj" worktree add -q --detach "$TMP_ROOT/spawn-wt" >/dev/null 2>&1
+  git -C "$other" worktree add -q --detach "$TMP_ROOT/spawn-other-wt" >/dev/null 2>&1
   mkdir -p "$TMP_ROOT/spawn-notgit" "$proj/sub"
 
   # Abort: the pane resolves to a plain non-git directory (not a worktree at all).
@@ -205,6 +207,12 @@ test_spawn_isolation_abort() {
   out=$(run_spawn "$home" abort-primary-ee5 "$proj" "$proj/sub" "$fakebin"); status=$?
   expect_code 1 "$status" "spawn landing inside the primary checkout should abort"
   assert_contains "$out" "did not yield an isolated worktree" "primary-checkout spawn lacked the isolation error"
+
+  # Abort: the pane resolves to a real linked worktree, but for an unrelated repo.
+  out=$(run_spawn "$home" abort-wrong-store-ee6 "$proj" "$TMP_ROOT/spawn-other-wt" "$fakebin"); status=$?
+  expect_code 1 "$status" "spawn landing in a different repo's worktree should abort"
+  assert_contains "$out" "backed by a different git store" "wrong-repo spawn lacked the git-store identity error"
+  assert_absent "$home/state/abort-wrong-store-ee6.meta" "wrong-repo spawn must not record meta"
 
   # Proceed: the pane resolves to a genuine, isolated worktree.
   out=$(run_spawn "$home" ok-isolated-ff6 "$proj" "$TMP_ROOT/spawn-wt" "$fakebin"); status=$?
