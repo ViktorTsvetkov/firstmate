@@ -9,15 +9,15 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-classify-lib)
 
-test_windows_last_status_line_strips_leading_utf8_bom() {
+test_last_status_line_strips_leading_utf8_bom_for_anchored_match() {
   local d line
   d="$TMP_ROOT/bom-done"
   mkdir -p "$d"
   printf '\357\273\277done: something\n' > "$d/task.status"
-  line=$(FM_PLATFORM_IS_WINDOWS=yes; last_status_line "$d/task.status")
+  line=$(FM_PLATFORM_IS_WINDOWS=no; last_status_line "$d/task.status")
   [ "$line" = "done: something" ] || fail "leading UTF-8 BOM was not stripped from the last status line"
-  status_is_captain_relevant "$line" || fail "BOM-prefixed done: did not classify as captain-relevant after normalization"
-  pass "forced-Windows last_status_line strips a genuine leading UTF-8 BOM"
+  FM_CAPTAIN_RE='^done:' status_is_captain_relevant "$line" || fail "BOM-prefixed done: did not classify with anchored captain regex after normalization"
+  pass "last_status_line strips a genuine leading UTF-8 BOM before anchored matching"
 }
 
 test_windows_last_status_line_ignores_bom_on_non_last_line() {
@@ -77,6 +77,14 @@ test_forced_windows_utf8_status_is_unchanged() {
   pass "forced-Windows UTF-8 status logs classify unchanged"
 }
 
+test_bom_prefixed_direct_status_line_classifies_with_anchor() {
+  local line
+  line=$(printf '\357\273\277done: direct')
+  FM_CAPTAIN_RE='^done:' status_is_captain_relevant "$line" \
+    || fail "direct BOM-prefixed done: did not classify with anchored captain regex"
+  pass "direct status-line classification strips a leading UTF-8 BOM"
+}
+
 test_forced_posix_no_bom_line_is_byte_identical() {
   local d line bytes
   d="$TMP_ROOT/posix-no-bom"
@@ -103,12 +111,13 @@ test_forced_posix_utf16_status_stays_plain() {
   pass "forced-POSIX UTF-16 status remains plain unread bytes"
 }
 
-test_windows_last_status_line_strips_leading_utf8_bom
+test_last_status_line_strips_leading_utf8_bom_for_anchored_match
 test_windows_last_status_line_ignores_bom_on_non_last_line
 test_windows_last_status_line_decodes_utf16le_done
 test_windows_last_status_line_decodes_utf16be_done
 test_windows_utf16_status_scan_is_actionable
 test_forced_windows_utf8_status_is_unchanged
+test_bom_prefixed_direct_status_line_classifies_with_anchor
 test_forced_posix_no_bom_line_is_byte_identical
 test_forced_posix_utf16_status_stays_plain
 
