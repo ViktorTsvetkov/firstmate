@@ -21,7 +21,7 @@ Crew status files are append-only wake-event logs, not current-state fields.
 `bin/fm-crew-state.sh <id>` is the cheap current-state read for an actionable heartbeat review: it attributes the matching no-mistakes run, active or terminal, to the crew's own branch and keeps that run-step authoritative even if the pane has closed.
 Only when no matching run exists does it fall back to the pane busy-signature and then the status log; a dead pane without a run reports unknown instead of trusting a stale log.
 The shared status-log reader strips only a genuine leading UTF-8 BOM, which native Windows PowerShell 5.1 can write when first creating a UTF-8 status file, before status verbs are classified.
-It also decodes UTF-16LE or UTF-16BE only when the file bytes prove that encoding by BOM or a consistent null-byte code-unit pattern, leaving ordinary UTF-8 and POSIX status files on the original byte path.
+It also decodes UTF-16LE or UTF-16BE on native Windows only when the file bytes prove that encoding by BOM or a consistent null-byte code-unit pattern, leaving ordinary BOM-less UTF-8 and POSIX status lines byte-identical.
 For herdr, that pane fallback trusts a native `busy` verdict outright, but corroborates native `idle` or unknown verdicts against the rendered busy signature before deciding the crew is not working.
 Optional X mode rides the same check path: the locked session-start bootstrap step drops a local `state/x-watch.check.sh` shim only after the user opts in with `FMX_PAIRING_TOKEN`, and non-X homes keep the default watcher behavior.
 
