@@ -207,6 +207,12 @@ case "$cmd $sub" in
   "pane list")
     jq_state --arg w "$ws" '{result:{panes:[.tabs[]|select(.workspace_id==$w)|{pane_id:.pane_id, tab_id:.tab_id}]}}'
     ;;
+  "pane get")
+    pane=${3:-}
+    cwd=${FM_FAKE_HERDR_FOREGROUND_CWD:-}
+    jq_state --arg p "$pane" --arg cwd "$cwd" \
+      'if any(.tabs[]?; .pane_id == $p) then {result:{pane:{pane_id:$p,foreground_cwd:$cwd}}} else {error:{code:"pane_not_found",message:("pane " + $p + " not found")}} end'
+    ;;
   "pane close")
     pane=${3:-}
     jq_state --arg p "$pane" '.tabs |= [.[]|select(.pane_id != $p)]' | save
@@ -926,6 +932,28 @@ test_windows_create_task_converts_shell_env_for_tab_create() {
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''run'$'\x1f''w1:p2'$'\x1f''C:\PROGRA~1\Git\usr\bin\bash.exe -l' \
     "Windows create_task did not start the resolved login shell in the task pane"
   pass "fm_backend_herdr_create_task: Windows branch converts the explicit SHELL env for herdr tab create"
+}
+
+test_windows_create_task_closes_partial_pane_when_shell_handoff_fails() {
+  local dir log resp fb out status cyglog
+  dir="$TMP_ROOT/create-task-windows-shell-handoff-fails"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; cyglog="$dir/cygpath.log"; : > "$log"; : > "$cyglog"
+  printf '{"result":{"tabs":[]}}\n' > "$resp/1.out"
+  printf '{"result":{"tab":{"tab_id":"w1:t2"},"root_pane":{"pane_id":"w1:p2"}}}\n' > "$resp/2.out"
+  printf '1\n' > "$resp/3.exit"
+  fb=$(make_herdr_fakebin "$dir")
+  add_cygpath_fake "$fb"
+  set +e
+  out=$( PATH="$fb:$PATH" SHELL=/usr/bin/bash FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_CYGPATH_LOG="$cyglog" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-newtask /c/Users/captain/project' "$ROOT" 2>&1 )
+  status=$?
+  set +e
+  [ "$status" -ne 0 ] || fail "create_task should fail when Windows pane run handoff fails"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''run'$'\x1f''w1:p2'$'\x1f''C:\PROGRA~1\Git\usr\bin\bash.exe -l' \
+    "Windows create_task did not attempt the login shell handoff"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''close'$'\x1f''w1:p2' \
+    "Windows create_task did not close the partial task pane after handoff failure"
+  [ -z "$out" ] || fail "create_task shell handoff failure should stay quiet beyond the failing command output, got '$out'"
+  pass "fm_backend_herdr_create_task: closes partial task pane when Windows shell handoff fails"
 }
 
 test_windows_container_ensure_converts_cwd_for_workspace_create() {
@@ -2099,6 +2127,99 @@ EOF
   pass "fm_backend_herdr_workspace_prune_seeded_default_tab: refuses to close the seeded default tab when its pane reports a working agent (defense in depth)"
 }
 
+test_spawn_closes_herdr_pane_when_later_abort_occurs() {
+  local proj wt data state_file config id out status log state fb task_tmp
+  id="herdrabortz4"
+  proj="$TMP_ROOT/spawn-abort-project"
+  wt="$TMP_ROOT/spawn-abort-wt"
+  data="$TMP_ROOT/spawn-abort-data"
+  state_file="$TMP_ROOT/spawn-abort-state-file"
+  config="$TMP_ROOT/spawn-abort-config"
+  fm_git_worktree "$proj" "$wt" "fm/$id"
+  mkdir -p "$data/$id" "$config"
+  : > "$state_file"
+  printf 'brief\n' > "$data/$id/brief.md"
+  dir="$TMP_ROOT/spawn-abort-herdr"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
+  fb=$(make_herdr_statefake "$dir")
+  set +e
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" FM_FAKE_HERDR_FOREGROUND_CWD="$wt" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state_file" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --backend herdr 2>&1 )
+  status=$?
+  set +e
+  [ "$status" -ne 0 ] || fail "herdr spawn should fail when metadata state path is a file"
+  assert_contains "$out" "mkdir:" "spawn should fail at the post-endpoint state directory creation point"
+  assert_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''create'$'\x1f''--workspace'$'\x1f''w1' \
+    "spawn should create the herdr task tab before the later abort"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''close'$'\x1f''w1:p3' \
+    "aborted herdr spawn should close the just-created task pane"
+  task_tmp="/tmp/fm-$id"
+  rm -rf "$task_tmp"
+  pass "fm-spawn.sh --backend herdr: closes the created pane on a later abort"
+}
+
+test_spawn_success_keeps_herdr_pane_open() {
+  local proj wt data state_dir config id out log state fb task_tmp
+  id="herdrsuccessz1"
+  proj="$TMP_ROOT/spawn-success-project"
+  wt="$TMP_ROOT/spawn-success-wt"
+  data="$TMP_ROOT/spawn-success-data"
+  state_dir="$TMP_ROOT/spawn-success-state"
+  config="$TMP_ROOT/spawn-success-config"
+  fm_git_worktree "$proj" "$wt" "fm/$id"
+  mkdir -p "$data/$id" "$state_dir" "$config"
+  printf 'brief\n' > "$data/$id/brief.md"
+  dir="$TMP_ROOT/spawn-success-herdr"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
+  fb=$(make_herdr_statefake "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" FM_FAKE_HERDR_FOREGROUND_CWD="$wt" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state_dir" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --backend herdr 2>&1 )
+  expect_code 0 $? "fm-spawn.sh --backend herdr should succeed with fake herdr"$'\n'"$out"
+  assert_grep "backend=herdr" "$state_dir/$id.meta" "herdr spawn meta missing backend=herdr"
+  assert_grep "window=default:w1:p3" "$state_dir/$id.meta" "herdr spawn meta missing session:pane target"
+  assert_grep "herdr_pane_id=w1:p3" "$state_dir/$id.meta" "herdr spawn meta missing pane id"
+  assert_not_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''close'$'\x1f''w1:p3' \
+    "successful herdr spawn must not close its own task pane"
+  task_tmp="/tmp/fm-$id"
+  rm -rf "$task_tmp"
+  pass "fm-spawn.sh --backend herdr: successful spawn keeps the pane open"
+}
+
+test_secondmate_spawn_closes_herdr_pane_when_later_abort_occurs() {
+  local home subhome data state_file config id out status log state fb task_tmp
+  id="herdrsmabortz8"
+  home="$TMP_ROOT/secondmate-abort-home"
+  subhome="$TMP_ROOT/secondmate-abort-subhome"
+  data="$home/data"
+  state_file="$TMP_ROOT/secondmate-abort-state-file"
+  config="$home/config"
+  mkdir -p "$data/$id" "$config" "$subhome/bin" "$subhome/data" "$subhome/state" "$subhome/config" "$subhome/projects"
+  : > "$state_file"
+  printf '%s\n' "$id" > "$subhome/.fm-secondmate-home"
+  printf 'firstmate\n' > "$subhome/AGENTS.md"
+  printf 'brief\n' > "$data/$id/brief.md"
+  dir="$TMP_ROOT/secondmate-abort-herdr"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
+  fb=$(make_herdr_statefake "$dir")
+  set +e
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" FM_FAKE_HERDR_FOREGROUND_CWD="$subhome" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$state_file" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$subhome" claude --backend herdr --secondmate 2>&1 )
+  status=$?
+  set +e
+  [ "$status" -ne 0 ] || fail "herdr secondmate spawn should fail when metadata state path is a file"
+  assert_contains "$out" "mkdir:" "secondmate spawn should fail at the post-endpoint state directory creation point"
+  assert_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''create'$'\x1f''--workspace'$'\x1f''w1' \
+    "secondmate spawn should create the herdr task tab before the later abort"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''close'$'\x1f''w1:p3' \
+    "aborted herdr secondmate spawn should close the just-created task pane"
+  task_tmp="/tmp/fm-$id"
+  rm -rf "$task_tmp"
+  pass "fm-spawn.sh --backend herdr --secondmate: closes the created pane on a later abort"
+}
+
 # test_no_jq_reserved_keyword_arg_names: regression guard for the
 # workspace-leak root cause (a jq `--arg`/`--argjson` named after a jq
 # reserved keyword, e.g. `label`, is a compile error on jq <= 1.6; this
@@ -2149,6 +2270,9 @@ test_repeated_cycles_reuse_one_workspace_no_orphans
 test_adopted_workspace_never_prunes_default_tab
 test_label_collision_startup_workspace_leaves_live_tab_alone
 test_prune_refuses_a_working_agent_pane_defense_in_depth
+test_spawn_closes_herdr_pane_when_later_abort_occurs
+test_spawn_success_keeps_herdr_pane_open
+test_secondmate_spawn_closes_herdr_pane_when_later_abort_occurs
 test_no_jq_reserved_keyword_arg_names
 test_create_task_refuses_duplicate_label
 test_windows_prune_default_tab_strips_cr_before_exact_label_compare
@@ -2168,6 +2292,7 @@ test_create_task_creates_and_parses_ids
 test_create_task_creates_with_no_focus_flag
 test_create_task_passes_explicit_shell_env
 test_windows_create_task_converts_shell_env_for_tab_create
+test_windows_create_task_closes_partial_pane_when_shell_handoff_fails
 test_windows_create_task_converts_cwd_for_tab_create
 test_posix_create_task_leaves_tab_cwd_byte_identical
 test_workspace_find_matches_only_this_homes_own_label
