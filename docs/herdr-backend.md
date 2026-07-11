@@ -25,6 +25,8 @@ Prerequisites:
 Select herdr by putting `herdr` in a local `config/backend` file - the durable way to pick it - or by exporting `FM_BACKEND=herdr` when you launch your harness for a one-off session; telling the first mate in chat to use herdr also works.
 It can also be auto-detected: when firstmate itself is running natively inside herdr (`HERDR_ENV=1`) and no explicit backend is set, firstmate auto-selects herdr and prints a one-time opt-out notice; running inside tmux nested in herdr always resolves to tmux instead.
 A herdr spawn refuses loudly before creating a session container or acquiring a ship/scout worktree if `herdr` or `jq` is missing or the installed herdr's protocol is older than verified.
+It also refuses if an already-running server reports `.server.compatible == false` or `.server.restart_needed == true`, because that means the herdr binary changed and the existing server must be restarted before firstmate can safely drive it.
+Firstmate does not auto-restart that server, so live sessions are never torn down implicitly after a herdr update.
 For `--secondmate` launches, secondmate home sync and inherited-config propagation happen before this spawn-time backend gate.
 
 No first-run provisioning is needed beyond having `herdr` and `jq` on `PATH`; firstmate creates the workspace and tab it needs on first spawn.
@@ -50,7 +52,7 @@ An auto-detected herdr spawn prints one loud stderr notice (set `config/backend`
 Auto-detecting tmux stays silent, since that reproduces today's unconfigured default byte-for-byte.
 Only when none of that resolves anything does firstmate fall back to the platform default: tmux on POSIX, or herdr on Windows, since tmux is POSIX-only.
 Absent `backend=` in a task's meta always means `tmux`; a herdr task carries an explicit `backend=herdr` line, while other experimental adapters carry their own backend values.
-A herdr spawn refuses loudly if `herdr` or `jq` is missing, or if the installed herdr's protocol is older than the verified minimum (`fm_backend_herdr_version_check`).
+A herdr spawn refuses loudly if `herdr` or `jq` is missing, if the installed herdr's protocol is older than the verified minimum (`fm_backend_herdr_version_check`), or if a running server reports an incompatible protocol or restart-required state after a herdr binary update.
 
 ## Worktree provider stays treehouse
 
@@ -190,7 +192,7 @@ Herdr tasks additionally record:
 | Operation | Verified herdr call | What was verified |
 |---|---|---|
 | Version/protocol gate | `herdr status --json` -> `.client.protocol` | Session-independent; `.server.*` fields ARE session-dependent. |
-| Headless server start | `HERDR_SESSION=<name> herdr server --session <name>` (backgrounded on POSIX; `nohup`-detached on native Windows - see "Native Windows path handling" below) | A bare socket call does NOT auto-start the server; the adapter always starts-then-polls before any workspace/tab/pane call. This fact is for start only, not cleanup, and the explicit `--session` flag is intentional because `HERDR_SESSION` alone is not safe session targeting. |
+| Headless server readiness/start | `herdr status --json --session <name>` first, then `HERDR_SESSION=<name> herdr server --session <name>` when needed (backgrounded on POSIX; `nohup`-detached on native Windows - see "Native Windows path handling" below) | A bare socket call does NOT auto-start the server; the adapter always checks readiness before any workspace/tab/pane call, starts when no compatible server is running, then polls readiness. Old status JSON that reports only `.server.running: true` remains accepted. A running server with `.server.compatible == false` or `.server.restart_needed == true` is refused as stale instead of treated as ready or auto-restarted. This fact is for start only, not cleanup, and the explicit `--session` flag is intentional because `HERDR_SESSION` alone is not safe session targeting. |
 | Duplicate task check | `herdr tab list --workspace <id>`, match by `.label` | Herdr does NOT enforce tab-label uniqueness itself; two tabs can share a label. The adapter's own duplicate check is required. |
 | Send literal (unsubmitted) | `herdr pane send-text <pane> <text>` | Does NOT auto-submit, contrary to the original design addendum's guess. Verified directly: a unique marker sent this way sits unexecuted in the composer until a separate Enter. Behaves exactly like tmux's `send-keys -l`. On native Windows Git Bash, the adapter disables MSYS path conversion around this call so a leading-slash skill payload such as `/no-mistakes` reaches herdr literally. |
 | Send + submit atomically | `herdr pane run <pane> <command>` | Runs and submits a command in one call; used for the fixed spawn-time commands (`treehouse get`, the `GOTMPDIR` export) exactly where tmux used one `send-keys ... Enter` call. |
@@ -202,6 +204,15 @@ Herdr tasks additionally record:
 | Recovery / list-live | `herdr tab list --workspace <id>`, filter labels starting with `fm-` | Label-based, never trusts a stored id blindly - see "ID stability" below. `<id>` is always THIS home's own workspace (`fm_backend_herdr_workspace_find`), so recovery never sees a sibling home's tabs. |
 | Workspace create / tab create (focus) | `herdr workspace create --no-focus`, `herdr tab create --no-focus` | Verified: neither focuses by default once a workspace already exists in the session, matching pre-P3 (flagless) behavior; `--no-focus` is passed anyway for defense in depth, since the very first workspace ever created in a brand-new session focuses regardless of the flag. `--focus` was separately verified to reliably focus, confirming the flag has real effect. |
 | Session targeting for DESTRUCTIVE calls | `herdr session stop <name> --session <name> --json`, then `herdr session delete <name> --session <name> --json`; never `herdr server stop` | Used by native-Windows adapter teardown only after the scoped workspace count reaches zero, and by `tests/herdr-test-safety.sh`, which re-queries `herdr session list --json` before every destructive test cleanup call. See "Session targeting" below - `HERDR_SESSION` alone is not reliably honored once another herdr server is already running on the machine. |
+
+## Server compatibility guard after herdr updates
+
+Newer herdr builds can report server/client compatibility in `herdr status --json`.
+When the selected session's server is already running, `fm_backend_herdr_server_ensure` treats it as ready only if `.server.running` is true and the optional compatibility fields do not say otherwise.
+If `.server.compatible` is `false` or `.server.restart_needed` is `true`, firstmate exits with a clear stale-server error before creating or driving any workspace, tab, or pane.
+The adapter intentionally does not stop, delete, or restart the live server in that case.
+That leaves any live panes under operator control and avoids turning a post-update compatibility check into an implicit session teardown.
+Older herdr status responses that lack those fields preserve the existing behavior: `.server.running: true` is still enough to reuse the server.
 
 ## Verified bug: `pane read --lines N` returns empty for small N
 

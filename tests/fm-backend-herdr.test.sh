@@ -443,6 +443,65 @@ test_posix_server_ensure_accepts_plain_running_status() {
   pass "fm_backend_herdr_server_ensure: POSIX branch keeps plain running compare behavior"
 }
 
+test_server_ensure_rejects_running_incompatible_server() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/server-ensure-running-incompatible"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"server":{"running":true,"compatible":false,"restart_needed":false}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "server_ensure should reject a running incompatible server"
+  assert_contains "$out" "error: herdr server for session 'fmtest' is running an incompatible protocol (restart required after a herdr update); firstmate will not drive a stale server" \
+    "server_ensure did not print the incompatible-server operator message"
+  assert_not_contains "$(cat "$log")" $'\x1f''server' \
+    "server_ensure must not auto-restart an incompatible running server"
+  pass "fm_backend_herdr_server_ensure: rejects running compatible=false server without auto-restart"
+}
+
+test_server_ensure_rejects_incompatible_server_after_start() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/server-ensure-poll-incompatible"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"server":{"running":false}}' > "$resp/1.out"
+  printf '%s\n' '{"server":{"running":true,"compatible":true,"restart_needed":true}}' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_start() { return 0; }; fm_backend_herdr_server_ensure fmtest' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "server_ensure should reject an incompatible server observed by the post-start poll"
+  assert_contains "$out" "error: herdr server for session 'fmtest' is running an incompatible protocol (restart required after a herdr update); firstmate will not drive a stale server" \
+    "post-start poll did not print the incompatible-server operator message"
+  [ "$(grep -c $'\x1f''status'$'\x1f''--json' "$log")" = 2 ] \
+    || fail "server_ensure should perform one initial status check and one post-start poll; log: $(cat "$log")"
+  pass "fm_backend_herdr_server_ensure: rejects restart_needed server reported by post-start poll"
+}
+
+test_server_ensure_accepts_running_compatible_server() {
+  local dir log resp fb
+  dir="$TMP_ROOT/server-ensure-running-compatible"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"server":{"running":true,"compatible":true,"restart_needed":false}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT"
+  expect_code 0 $? "server_ensure should accept a running compatible server"
+  assert_not_contains "$(cat "$log")" $'\x1f''server' \
+    "server_ensure should not start the server when status reports compatible running"
+  pass "fm_backend_herdr_server_ensure: accepts running compatible server"
+}
+
+test_server_ensure_accepts_running_status_without_compat_fields() {
+  local dir log resp fb
+  dir="$TMP_ROOT/server-ensure-running-old-status"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '%s\n' '{"server":{"running":true}}' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT"
+  expect_code 0 $? "server_ensure should accept old status JSON with no compatibility fields"
+  assert_not_contains "$(cat "$log")" $'\x1f''server' \
+    "server_ensure should not start the server when old status reports running"
+  pass "fm_backend_herdr_server_ensure: accepts running status with no compatibility fields"
+}
+
 # --- container_ensure / create_task ------------------------------------------
 
 test_container_ensure_starts_server_and_workspace() {
@@ -2075,6 +2134,10 @@ test_posix_server_start_keeps_existing_subshell_launch
 test_windows_server_ensure_strips_cr_from_running_status
 test_windows_server_ensure_strips_cr_from_poll_status
 test_posix_server_ensure_accepts_plain_running_status
+test_server_ensure_rejects_running_incompatible_server
+test_server_ensure_rejects_incompatible_server_after_start
+test_server_ensure_accepts_running_compatible_server
+test_server_ensure_accepts_running_status_without_compat_fields
 test_container_ensure_starts_server_and_workspace
 test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
