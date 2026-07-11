@@ -371,6 +371,18 @@ fm_backend_meta_for_window() {  # <target> <state-dir>
   return 1
 }
 
+fm_backend_selector_is_herdr_target() {  # <resolved-target>
+  local session rest workspace pane
+  session=${1%%:*}
+  rest=${1#*:}
+  workspace=${rest%%:*}
+  pane=${rest#*:}
+  [ "$session" != "$1" ] || return 1
+  [ "$pane" != "$rest" ] || return 1
+  [ "${pane#*:}" = "$pane" ] || return 1
+  [ -n "$session" ] && [ -n "$workspace" ] && [ -n "$pane" ]
+}
+
 fm_backend_of_selector() {  # <raw-target> <resolved-target> <state-dir>
   local raw=$1 resolved=$2 state=$3 meta
   case "$raw" in
@@ -387,10 +399,9 @@ fm_backend_of_selector() {  # <raw-target> <resolved-target> <state-dir>
     meta=$(fm_backend_meta_for_window "$resolved" "$state" 2>/dev/null || true)
     [ -n "$meta" ] && { fm_backend_of_meta "$meta"; return 0; }
   fi
-  if fm_platform_is_windows; then
-    case "$resolved" in
-      *:*:*) printf 'herdr'; return 0 ;;
-    esac
+  if fm_backend_selector_is_herdr_target "$resolved"; then
+    printf 'herdr'
+    return 0
   fi
   printf 'tmux'
 }

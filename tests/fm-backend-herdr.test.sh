@@ -1799,6 +1799,46 @@ SH
   pass "fm-peek/fm-send: explicit stale targets matching metadata use the recorded backend"
 }
 
+test_scripts_route_explicit_herdr_target_without_meta() {
+  local dir state log resp fb neutral out
+  dir="$TMP_ROOT/script-explicit-herdr-target"; state="$dir/state"; mkdir -p "$state" "$dir/responses"
+  log="$dir/log"; resp="$dir/responses"; : > "$log"
+  neutral="$dir/neutral-root"; mkdir -p "$neutral"
+  touch "$state/.last-watcher-beat"
+  printf 'captured explicit herdr pane\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  cat > "$fb/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  capture-pane)
+    printf 'captured explicit tmux pane\n'
+    ;;
+  *)
+    printf 'unexpected tmux call: %s\n' "$*" >&2
+    exit 42
+    ;;
+esac
+SH
+  chmod +x "$fb/tmux"
+
+  out=$( PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$neutral" FM_STATE_OVERRIDE="$state" \
+    FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    "$ROOT/bin/fm-peek.sh" default:w1:p2 5 2>/dev/null )
+  [ "$out" = "captured explicit herdr pane" ] || fail "fm-peek did not capture an explicit herdr target without metadata, got '$out'"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2' \
+    "fm-peek did not route the explicit herdr target through herdr capture"
+
+  : > "$log"
+  out=$( PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$neutral" FM_STATE_OVERRIDE="$state" \
+    FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    "$ROOT/bin/fm-peek.sh" tmuxsess:win 5 2>/dev/null )
+  [ "$out" = "captured explicit tmux pane" ] || fail "single-colon explicit target should stay on tmux, got '$out'"
+  [ ! -s "$log" ] || fail "single-colon explicit tmux target should not call herdr"
+
+  pass "fm-peek: explicit herdr targets without metadata route to herdr, single-colon tmux targets stay tmux"
+}
+
 # --- workspace lifecycle: reuse, no orphans, default-tab pruning -------------
 
 test_workspace_ensure_prunes_default_tab() {
@@ -2131,3 +2171,4 @@ test_dispatch_routes_herdr_backend
 test_dispatch_busy_state_unknown_for_tmux
 test_dispatch_composer_state_routes_by_backend
 test_scripts_route_explicit_target_through_meta_backend
+test_scripts_route_explicit_herdr_target_without_meta
