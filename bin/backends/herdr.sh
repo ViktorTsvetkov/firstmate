@@ -242,7 +242,7 @@ fm_backend_herdr_server_ready() {  # <session>
   running=$(printf '%s' "$status" | jq -r '.server.running // false' 2>/dev/null)
   running=$(printf '%s' "$running" | fm_backend_herdr_windows_strip_cr)
   [ "$running" = "true" ] || return 1
-  compatible=$(printf '%s' "$status" | jq -r '.server.compatible // empty' 2>/dev/null)
+  compatible=$(printf '%s' "$status" | jq -r 'if .server | has("compatible") then .server.compatible else empty end' 2>/dev/null)
   compatible=$(printf '%s' "$compatible" | fm_backend_herdr_windows_strip_cr)
   restart_needed=$(printf '%s' "$status" | jq -r '.server.restart_needed // false' 2>/dev/null)
   restart_needed=$(printf '%s' "$restart_needed" | fm_backend_herdr_windows_strip_cr)

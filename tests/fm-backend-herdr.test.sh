@@ -446,7 +446,7 @@ test_posix_server_ensure_accepts_plain_running_status() {
 test_server_ensure_rejects_running_incompatible_server() {
   local dir log resp fb out status
   dir="$TMP_ROOT/server-ensure-running-incompatible"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  printf '%s\n' '{"server":{"running":true,"compatible":false,"restart_needed":true}}' > "$resp/1.out"
+  printf '%s\n' '{"server":{"running":true,"compatible":false,"restart_needed":false}}' > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT" 2>&1 )
@@ -456,14 +456,14 @@ test_server_ensure_rejects_running_incompatible_server() {
     "server_ensure did not print the incompatible-server operator message"
   assert_not_contains "$(cat "$log")" $'\x1f''server' \
     "server_ensure must not auto-restart an incompatible running server"
-  pass "fm_backend_herdr_server_ensure: rejects running incompatible server without auto-restart"
+  pass "fm_backend_herdr_server_ensure: rejects running compatible=false server without auto-restart"
 }
 
 test_server_ensure_rejects_incompatible_server_after_start() {
   local dir log resp fb out status
   dir="$TMP_ROOT/server-ensure-poll-incompatible"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf '%s\n' '{"server":{"running":false}}' > "$resp/1.out"
-  printf '%s\n' '{"server":{"running":true,"compatible":false,"restart_needed":true}}' > "$resp/2.out"
+  printf '%s\n' '{"server":{"running":true,"compatible":true,"restart_needed":true}}' > "$resp/2.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_start() { return 0; }; fm_backend_herdr_server_ensure fmtest' "$ROOT" 2>&1 )
@@ -473,7 +473,7 @@ test_server_ensure_rejects_incompatible_server_after_start() {
     "post-start poll did not print the incompatible-server operator message"
   [ "$(grep -c $'\x1f''status'$'\x1f''--json' "$log")" = 2 ] \
     || fail "server_ensure should perform one initial status check and one post-start poll; log: $(cat "$log")"
-  pass "fm_backend_herdr_server_ensure: rejects incompatible server reported by post-start poll"
+  pass "fm_backend_herdr_server_ensure: rejects restart_needed server reported by post-start poll"
 }
 
 test_server_ensure_accepts_running_compatible_server() {
