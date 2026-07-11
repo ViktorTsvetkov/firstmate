@@ -3,6 +3,8 @@
 # Usage: fm-peek.sh <target> [lines=40]
 #   <target> may be a bare firstmate task name (fm-xyz), resolved through
 #   this home's state/<id>.meta, or an explicit backend target.
+#   Unrecorded herdr-shaped explicit targets use herdr only when herdr is the
+#   active runtime backend; otherwise POSIX keeps the tmux compatibility path.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
