@@ -951,6 +951,7 @@ remove_firstmate_home() {
     }
     return_err=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-treehouse-return.XXXXXX") || return 1
     if teardown_treehouse_return "$abs_home_path" "$FM_ROOT" "$label" 2>"$return_err"; then
+      cat "$return_err" >&2
       rm -f "$return_err"
       return 0
     fi
