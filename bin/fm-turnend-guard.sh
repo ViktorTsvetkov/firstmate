@@ -3,9 +3,10 @@
 #
 # fm-guard.sh (bin/fm-guard.sh) is pull-based: it only warns when some other
 # supervision script happens to run. A primary session that ends a turn without
-# re-arming the watcher, and then never runs another fleet-touching command
-# itself, can sit blind for hours - see docs/turnend-guard.md for the 2026-07-04
-# incident this backstops (a parked no-mistakes gate sat unwatched all night).
+# re-arming the watcher or entering healthy daemon-owned AFK supervision, and
+# then never runs another fleet-touching command itself, can sit blind for hours
+# - see docs/turnend-guard.md for the 2026-07-04 incident this backstops (a
+# parked no-mistakes gate sat unwatched all night).
 # This hook is push-based: Claude Code invokes it every time the primary is
 # about to end a turn, and it can force the turn to continue instead by exiting
 # 2 with a reason on stderr. That mechanism, the stdin payload schema, and the
@@ -77,6 +78,7 @@ GIT_COMMON_DIR=$(git -C "$FM_ROOT" rev-parse --git-common-dir 2>/dev/null) || ex
 fm_supervision_status "$STATE" "$GRACE"
 [ "$FM_SUP_IN_FLIGHT" -gt 0 ] || exit 0
 fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME" && exit 0
+fm_afk_supervision_healthy "$STATE" "$SCRIPT_DIR/fm-supervise-daemon.sh" "$GRACE" && exit 0
 
 REASON='tasks in flight, no live watcher - run bin/fm-watch-arm.sh as a background task before ending the turn'
 rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'

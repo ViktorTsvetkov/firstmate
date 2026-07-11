@@ -168,6 +168,59 @@ fm_watcher_healthy() {
   return 0
 }
 
+fm_supervise_daemon_lock_owner() {
+  local state=$1 lock owner
+  lock="$state/.supervise-daemon.lock"
+  if [ -L "$lock" ]; then
+    owner=$(readlink "$lock" 2>/dev/null) || return 1
+    [ -n "$owner" ] || return 1
+    case "$owner" in
+      /*) printf '%s\n' "$owner" ;;
+      *) printf '%s/%s\n' "$(dirname "$lock")" "$owner" ;;
+    esac
+    return 0
+  fi
+  [ -d "$lock" ] || return 1
+  printf '%s\n' "$lock"
+}
+
+fm_supervise_daemon_pid_matches() {
+  local pid=$1 owner=$2 daemon_path=$3 identity current command
+  identity=$(cat "$owner/pid-identity" 2>/dev/null || true)
+  if [ -n "$identity" ]; then
+    current=$(fm_pid_identity "$pid") || return 1
+    [ "$current" = "$identity" ]
+    return
+  fi
+  command=$(ps -p "$pid" -o command= 2>/dev/null || true)
+  case "$command" in
+    *"$daemon_path"*|*"fm-supervise-daemon.sh"*) return 0 ;;
+  esac
+  return 1
+}
+
+FM_SUPERVISE_DAEMON_HEALTHY_PID=
+fm_supervise_daemon_lock_held_by_live_daemon() {
+  local state=$1 daemon_path=$2 owner pid
+  FM_SUPERVISE_DAEMON_HEALTHY_PID=
+  owner=$(fm_supervise_daemon_lock_owner "$state") || return 1
+  pid=$(cat "$owner/pid" 2>/dev/null || true)
+  fm_pid_alive "$pid" || return 1
+  fm_supervise_daemon_pid_matches "$pid" "$owner" "$daemon_path" || return 1
+  # shellcheck disable=SC2034 # Read by callers after this returns.
+  FM_SUPERVISE_DAEMON_HEALTHY_PID=$pid
+  return 0
+}
+
+fm_afk_supervision_healthy() {
+  local state=$1 daemon_path=$2 grace=${3:-${FM_GUARD_GRACE:-300}} beat age
+  [ -e "$state/.afk" ] || return 1
+  fm_supervise_daemon_lock_held_by_live_daemon "$state" "$daemon_path" || return 1
+  beat="$state/.last-watcher-beat"
+  age=$(fm_path_age "$beat")
+  [ "$age" -lt "$grace" ]
+}
+
 # ==========================================================================
 # Lock primitives.
 #
