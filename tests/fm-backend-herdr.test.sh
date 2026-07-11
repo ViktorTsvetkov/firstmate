@@ -1799,6 +1799,39 @@ SH
   pass "fm-peek/fm-send: explicit stale targets matching metadata use the recorded backend"
 }
 
+test_fm_peek_explicit_herdr_target_does_not_require_task_meta() {
+  local dir state log resp fb neutral bare explicit
+  dir="$TMP_ROOT/script-explicit-herdr-no-meta"; state="$dir/state"; mkdir -p "$state" "$dir/responses"
+  log="$dir/log"; resp="$dir/responses"; : > "$log"
+  neutral="$dir/neutral-root"; mkdir -p "$neutral"
+  fm_write_meta "$state/repro.meta" "window=fm-e2e:wB:p1" "backend=herdr"
+  touch "$state/.last-watcher-beat"
+  printf 'captured explicit herdr pane\n' > "$resp/1.out"
+  printf 'captured explicit herdr pane\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  cat > "$fb/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf 'tmux should not be used for an active herdr explicit target\n' >&2
+exit 42
+SH
+  chmod +x "$fb/tmux"
+
+  bare=$( PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$neutral" FM_STATE_OVERRIDE="$state" \
+    FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND=herdr \
+    "$ROOT/bin/fm-peek.sh" fm-repro 5 2>/dev/null )
+  [ "$bare" = "captured explicit herdr pane" ] || fail "bare fm-<id> herdr peek did not capture the pane, got '$bare'"
+
+  explicit=$( PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$neutral" FM_STATE_OVERRIDE="$state" \
+    FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND=herdr \
+    "$ROOT/bin/fm-peek.sh" fm-e2e:wB:p1 5 2>/dev/null )
+  [ "$explicit" = "$bare" ] || fail "explicit herdr target should capture the same pane content as the bare meta-routed selector"$'\n'"bare=$bare"$'\n'"explicit=$explicit"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''read'$'\x1f''wB:p1' \
+    "fm-peek did not read the explicit herdr pane id"
+
+  pass "fm-peek: active herdr explicit fm-*:*:* targets capture without requiring task metadata for the raw selector"
+}
+
 # --- workspace lifecycle: reuse, no orphans, default-tab pruning -------------
 
 test_workspace_ensure_prunes_default_tab() {
@@ -2131,3 +2164,4 @@ test_dispatch_routes_herdr_backend
 test_dispatch_busy_state_unknown_for_tmux
 test_dispatch_composer_state_routes_by_backend
 test_scripts_route_explicit_target_through_meta_backend
+test_fm_peek_explicit_herdr_target_does_not_require_task_meta

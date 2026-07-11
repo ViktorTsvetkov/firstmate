@@ -20,6 +20,10 @@ T=$(fm_backend_resolve_selector "$RAW_TARGET" "$STATE")
 N=${2:-40}
 
 BACKEND=$(fm_backend_of_selector "$RAW_TARGET" "$T" "$STATE")
-EXPECTED_LABEL=$(fm_backend_expected_label_of_selector "$RAW_TARGET" "$STATE")
+EXPECTED_LABEL=
+case "$BACKEND" in
+  herdr) ;;
+  *) EXPECTED_LABEL=$(fm_backend_expected_label_of_selector "$RAW_TARGET" "$STATE") ;;
+esac
 
 fm_backend_capture "$BACKEND" "$T" "$N" "$EXPECTED_LABEL"
