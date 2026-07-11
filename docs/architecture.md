@@ -33,10 +33,11 @@ On native Windows with herdr-backed tasks, `fm-watch.sh` refreshes the same beac
 A pull-based guard (`bin/fm-guard.sh`) warns through supervision tool output if the primary checkout is tangled, or if tasks are in flight and that watcher stops running or queued wakes are waiting to be drained.
 The drain script calls that guard after emptying the queue, which avoids repeating the queued-wakes warning for records it just consumed while still warning on stale watcher liveness.
 It leads with prominent bordered banners for the tangle and no-watcher cases so they cannot be skimmed past.
-On the `claude` harness, a tracked project Stop hook (`bin/fm-turnend-guard.sh`) gives the primary session a push-based backstop: when work is in flight and no identity-matched watcher lock with a fresh beacon is live, Claude Code receives the hook's exit-2 reason and must continue the turn before it can stop.
+On the `claude` harness, a tracked project Stop hook (`bin/fm-turnend-guard.sh`) gives the primary session a push-based backstop: when work is in flight and neither a live identity-matched watcher lock with a fresh beacon nor healthy AFK daemon-owned supervision is present, Claude Code receives the hook's exit-2 reason and must continue the turn before it can stop.
 The hook is scoped out of secondmate homes and crewmate/scout worktrees, allows Claude's own `stop_hook_active` retry, and is documented in [turnend-guard.md](turnend-guard.md).
 
 A presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) extends this for walk-away supervision: the `/afk` skill activates it, after which the watcher reverts to daemon-managed one-shot mode and the daemon self-handles routine wakes in bash.
+The turn-end guard treats that away-mode path as healthy only when `state/.afk` is present, the daemon lock belongs to a live identity-matched supervise daemon, and the shared watcher beacon is fresh.
 The watcher and daemon share `bin/fm-classify-lib.sh` for captain-relevant status verbs and status-scan primitives.
 The always-on watcher also uses that library's provably-working predicate on no-verb signals and first-sighting stale panes before status-log terminality is trusted, while the daemon keeps its away-mode stale recheck unchanged.
 The daemon escalates only captain-relevant events as one batched, single-line digest (prefixed with an in-band sentinel marker so firstmate can tell daemon injections apart from real messages).

@@ -3,9 +3,10 @@
 #
 # fm-guard.sh (bin/fm-guard.sh) is pull-based: it only warns when some other
 # supervision script happens to run. A primary session that ends a turn without
-# re-arming the watcher, and then never runs another fleet-touching command
-# itself, can sit blind for hours - see docs/turnend-guard.md for the 2026-07-04
-# incident this backstops (a parked no-mistakes gate sat unwatched all night).
+# re-arming the watcher or entering healthy daemon-owned AFK supervision, and
+# then never runs another fleet-touching command itself, can sit blind for hours
+# - see docs/turnend-guard.md for the 2026-07-04 incident this backstops (a
+# parked no-mistakes gate sat unwatched all night).
 # This hook is push-based: Claude Code invokes it every time the primary is
 # about to end a turn, and it can force the turn to continue instead by exiting
 # 2 with a reason on stderr. That mechanism, the stdin payload schema, and the

@@ -55,10 +55,13 @@ That remains the right predicate for the pull-based guard, where a brief gap aft
 It also exposes `fm_supervision_status` for callers that need the individual fields (in-flight count, beacon freshness/age, queued-wake pending) rather than just the boolean.
 
 `bin/fm-turnend-guard.sh` deliberately uses a sharper end-of-turn predicate.
-It first uses `fm_supervision_status` to count in-flight tasks, then requires `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`.
+It first uses `fm_supervision_status` to count in-flight tasks, then accepts either live normal supervision or live away-mode supervision.
+Normal supervision requires `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`.
 That shared live-watcher check is the same one used by `bin/fm-watch-arm.sh`: the recorded `state/.watch.lock/pid` must name a live process, the lock's recorded home/path/pid-identity must match the current live pid, and `state/.last-watcher-beat` must still be within `FM_GUARD_GRACE`.
 On native Windows, the recorded home and watcher path match across drive-letter and MSYS path forms; on POSIX, those path comparisons stay literal.
 This means a just-exited watcher with a fresh leftover beacon still blocks the Stop hook immediately, while a live but wedged watcher with an ancient beacon also blocks.
+Away-mode supervision is healthy when `state/.afk` exists, `state/.supervise-daemon.lock` is held by a live identity-matched `bin/fm-supervise-daemon.sh` process, and the same `state/.last-watcher-beat` is fresh.
+That avoids a false `SUPERVISION IS OFF` block while the captain is away and the sub-supervisor daemon intentionally owns one-shot watcher supervision.
 
 ## Scoping to the PRIMARY only
 
