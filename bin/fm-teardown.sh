@@ -832,7 +832,7 @@ remove_firstmate_home() {
     fi
     return_rc=$?
     cat "$return_err" >&2
-    if [ "$return_rc" -ne "$TEARDOWN_TREEHOUSE_LOCK_REFUSED" ] && grep -F 'not managed by treehouse' "$return_err" >/dev/null; then
+    if fm_platform_is_windows && [ "$return_rc" -ne "$TEARDOWN_TREEHOUSE_LOCK_REFUSED" ] && grep -F 'not managed by treehouse' "$return_err" >/dev/null; then
       rm -f "$return_err"
       safe_rm_rf "$abs_home_path" "$label"
       return $?

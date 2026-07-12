@@ -341,13 +341,20 @@ test_server_ready_rejects_incompatible_server() {
   dir="$TMP_ROOT/server-incompatible"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf '{"server":{"running":true,"compatible":false,"restart_needed":false}}\n' > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT" 2>&1 )
   status=$?
-  [ "$status" -ne 0 ] || fail "server_ensure should reject a running but incompatible herdr server"
+  [ "$status" -ne 0 ] || fail "server_ensure should reject a running but incompatible herdr server on Windows"
   assert_contains "$out" "incompatible protocol" "server_ensure should explain stale-server refusal"
   assert_not_contains "$(cat "$log")" $'\x1f''server' "server_ensure must not start another server when a stale server is already running"
-  pass "fm_backend_herdr_server_ensure: rejects present compatible=false stale servers"
+
+  : > "$log"; rm -f "$resp"/*.out "$resp/.count"
+  printf '{"server":{"running":true,"compatible":false,"restart_needed":false}}\n' > "$resp/1.out"
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT" \
+    || fail "server_ensure should accept running=true compatible=false on POSIX"
+  assert_not_contains "$(cat "$log")" $'\x1f''server' "POSIX server_ensure should not start another server when running=true"
+  pass "fm_backend_herdr_server_ensure: rejects compatible=false stale servers only on Windows"
 }
 
 test_server_ready_accepts_absent_compatible_field() {

@@ -19,6 +19,13 @@ case "${1:-}" in
     shift
     if [ "${1:-}" = "${FM_FAKE_WINDOWS_HOME:-}" ]; then
       printf '%s\n' "${FM_FAKE_POSIX_HOME:?}"
+    elif [[ "${1:-}" =~ ^[A-Za-z]:[\\/] ]]; then
+      drive=$(printf '%s' "${1%%:*}" | tr '[:upper:]' '[:lower:]')
+      rest=${1#?:}
+      rest=${rest#/}
+      rest=${rest#\\}
+      rest=${rest//\\//}
+      printf '/%s/%s\n' "$drive" "$rest"
     else
       printf '%s\n' "${1:-}"
     fi
@@ -183,8 +190,8 @@ test_windows_different_store_treehouse_home_reports_explicit_home_workaround() {
   pass "fm-home-seed: different-store treehouse homes explain the explicit-home workaround"
 }
 
-test_posix_different_store_treehouse_home_keeps_upstream_message() {
-  local home acquired fakebin log err expected lease
+test_posix_different_store_treehouse_home_returns_unconditionally() {
+  local home acquired fakebin log err out lease
   home="$TMP_ROOT/posix-different-store-active"
   acquired="$TMP_ROOT/posix-different-store-acquired"
   git clone --quiet "$ROOT" "$home"
@@ -194,25 +201,26 @@ test_posix_different_store_treehouse_home_keeps_upstream_message() {
   log="$TMP_ROOT/posix-different-store-fake/tmux.log"
   err="$TMP_ROOT/posix-different-store.err"
   lease="$TMP_ROOT/posix-different-store-fake/lease"
-  expected="error: treehouse get --lease yielded a firstmate home backed by a different git store: $acquired"
 
-  if PATH="$fakebin:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_ROOT_OVERRIDE="$home" FM_HOME="$home" \
+  out=$(PATH="$fakebin:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_ROOT_OVERRIDE="$home" FM_HOME="$home" \
     FM_FAKE_WINDOWS_HOME="$acquired" FM_FAKE_POSIX_HOME="$acquired" \
     FM_FAKE_TMUX_LOG="$log" FM_FAKE_TREEHOUSE_LEASE_FILE="$lease" \
     FM_SECONDMATE_CHARTER='posix different store scope' FM_SECONDMATE_SCOPE='posix different store scope' \
-    "$ROOT/bin/fm-home-seed.sh" posixdash - alpha >/dev/null 2>"$err"; then
-    fail "seed accepted a POSIX treehouse home backed by a different git store"
-  fi
-  [ "$(cat "$err")" = "$expected" ] || fail "POSIX different-store message changed"$'\n'"expected: $expected"$'\n'"actual: $(cat "$err")"
+    "$ROOT/bin/fm-home-seed.sh" posixdash - alpha 2>"$err") \
+    || fail "seed rejected a POSIX treehouse home backed by a different git store: $(cat "$err")"
+  printf '%s\n' "$out" | grep -F "home=$acquired" >/dev/null || fail "seed did not report the acquired POSIX home"
+  [ ! -s "$err" ] || fail "POSIX different-store acceptance should not emit a refusal: $(cat "$err")"
   assert_grep 'treehouse get --lease --lease-holder posixdash' "$log" \
-    "POSIX different-store refusal should happen after treehouse get"
-  assert_grep "treehouse return --force $acquired" "$log" \
-    "POSIX different-store refusal did not return the acquired treehouse home"
-  pass "fm-home-seed: POSIX different-store refusal keeps the upstream message"
+    "POSIX different-store acceptance should happen after treehouse get"
+  if grep -F "treehouse return --force $acquired" "$log" >/dev/null; then
+    fail "POSIX different-store acceptance should not return the acquired treehouse home"
+  fi
+  [ -f "$lease" ] || fail "successful POSIX seed should keep the durable lease held"
+  pass "fm-home-seed: POSIX different-store treehouse homes return unconditionally"
 }
 
 test_windows_drive_home_from_treehouse_is_not_treated_as_active_descendant
 test_windows_drive_home_inside_active_home_is_still_refused
 test_windows_acquired_home_is_returned_after_post_lease_validation_failure
 test_windows_different_store_treehouse_home_reports_explicit_home_workaround
-test_posix_different_store_treehouse_home_keeps_upstream_message
+test_posix_different_store_treehouse_home_returns_unconditionally

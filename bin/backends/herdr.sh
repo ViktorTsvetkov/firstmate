@@ -275,7 +275,7 @@ fm_backend_herdr_server_ready() {  # <session>
   compatible=$(printf '%s' "$compatible" | fm_backend_herdr_windows_strip_cr)
   restart_needed=$(printf '%s' "$status" | jq -r '.server.restart_needed // false' 2>/dev/null)
   restart_needed=$(printf '%s' "$restart_needed" | fm_backend_herdr_windows_strip_cr)
-  if [ "$compatible" = "false" ] || [ "$restart_needed" = "true" ]; then
+  if fm_platform_is_windows && { [ "$compatible" = "false" ] || [ "$restart_needed" = "true" ]; }; then
     echo "error: herdr server for session '$session' is running an incompatible protocol (restart required after a herdr update); firstmate will not drive a stale server" >&2
     return 2
   fi
@@ -666,7 +666,9 @@ EOF
   pane_id=$(printf '%s' "$pane_id" | fm_backend_herdr_windows_strip_cr)
   if [ -z "$tab_id" ] || [ -z "$pane_id" ]; then
     echo "error: could not parse tab/pane id from herdr tab create output" >&2
-    fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
+    if fm_platform_is_windows; then
+      fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
+    fi
     return 1
   fi
   if [ -n "$shell_arg" ] && fm_platform_is_windows; then
@@ -685,12 +687,16 @@ $dup_tab_ids
 EOF
     list=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || {
       echo "error: could not verify herdr husk removal for tab '$label' in workspace $wsid (session $session)" >&2
-      fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
+      if fm_platform_is_windows; then
+        fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
+      fi
       return 1
     }
     if ! printf '%s' "$list" | jq -e '(.result.tabs | type) == "array"' >/dev/null 2>&1; then
       echo "error: could not parse herdr tab list output for workspace $wsid (session $session)" >&2
-      fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
+      if fm_platform_is_windows; then
+        fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
+      fi
       return 1
     fi
     remaining_dup_tabs=$(printf '%s' "$list" | jq -r --arg want "$label" --arg replacement "$tab_id" \
@@ -698,7 +704,9 @@ EOF
     remaining_dup_tabs=${remaining_dup_tabs//$'\n'/ }
     if [ -n "$remaining_dup_tabs" ]; then
       echo "error: failed to remove preexisting herdr tab(s) $remaining_dup_tabs for label '$label' in workspace $wsid (session $session)" >&2
-      fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
+      if fm_platform_is_windows; then
+        fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
+      fi
       return 1
     fi
   fi

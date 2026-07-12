@@ -704,11 +704,13 @@ validate_spawn_worktree() {  # <source> <inspect-target>
     echo "error: $source did not yield an isolated worktree (resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout. Inspect target $inspect_target" >&2
     exit 1
   fi
-  wt_common=$(fm_git_common_dir_realpath "$WT" 2>/dev/null || true)
-  proj_common=$(fm_git_common_dir_realpath "$PROJ_ABS" 2>/dev/null || true)
-  if [ -z "$wt_common" ] || [ -z "$proj_common" ] || [ "$wt_common" != "$proj_common" ]; then
-    echo "error: $source yielded a worktree backed by a different git store (resolved '$WT'; worktree common-dir '${wt_common:-none}'; requested repo common-dir '${proj_common:-none}'); refusing to launch to avoid cross-wiring a stale treehouse pool entry. Inspect target $inspect_target" >&2
-    exit 1
+  if fm_platform_is_windows; then
+    wt_common=$(fm_git_common_dir_realpath "$WT" 2>/dev/null || true)
+    proj_common=$(fm_git_common_dir_realpath "$PROJ_ABS" 2>/dev/null || true)
+    if [ -z "$wt_common" ] || [ -z "$proj_common" ] || [ "$wt_common" != "$proj_common" ]; then
+      echo "error: $source yielded a worktree backed by a different git store (resolved '$WT'; worktree common-dir '${wt_common:-none}'; requested repo common-dir '${proj_common:-none}'); refusing to launch to avoid cross-wiring a stale treehouse pool entry. Inspect target $inspect_target" >&2
+      exit 1
+    fi
   fi
 }
 
