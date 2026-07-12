@@ -26,6 +26,9 @@
 # bin/ script (which sets its own SCRIPT_DIR) or directly by a test.
 _FM_CLASSIFY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _FM_CLASSIFY_LIB_DIR="."
 
+# shellcheck source=bin/fm-platform-lib.sh
+. "$_FM_CLASSIFY_LIB_DIR/fm-platform-lib.sh"
+
 # The crew current-state reader used for the "provably working" decision.
 # Overridable so tests can stub the run-step/pane verdict without a real worktree
 # or no-mistakes install; absent, it points at the real sibling script.
@@ -59,16 +62,80 @@ FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 # shellcheck disable=SC2034 # Read by the watcher and daemon (fm-watch.sh, fm-supervise-daemon.sh), not this lib.
 FM_PAUSE_RESURFACE_SECS_DEFAULT=3600
 
+status_file_utf16_encoding() {  # <file>
+  local bytes rest byte idx=0 even_nulls=0 odd_nulls=0
+  bytes=$(LC_ALL=C od -An -tx1 -N 512 "$1" 2>/dev/null | tr -d ' \n') || return 0
+  case "$bytes" in
+    fffe*) printf '%s' UTF-16LE; return 0 ;;
+    feff*) printf '%s' UTF-16BE; return 0 ;;
+  esac
+
+  rest=$bytes
+  while [ ${#rest} -ge 2 ]; do
+    byte=${rest:0:2}
+    rest=${rest:2}
+    if [ "$byte" = 00 ]; then
+      if [ $((idx % 2)) -eq 0 ]; then
+        even_nulls=$((even_nulls + 1))
+      else
+        odd_nulls=$((odd_nulls + 1))
+      fi
+    fi
+    idx=$((idx + 1))
+  done
+
+  if [ "$odd_nulls" -ge 2 ] && [ "$even_nulls" -eq 0 ]; then
+    printf '%s' UTF-16LE
+  elif [ "$even_nulls" -ge 2 ] && [ "$odd_nulls" -eq 0 ]; then
+    printf '%s' UTF-16BE
+  fi
+}
+
+decode_status_file_utf16() {  # <encoding> <file>
+  local enc=$1 f=$2
+  if command -v iconv >/dev/null 2>&1; then
+    iconv -f "$enc" -t UTF-8 "$f" 2>/dev/null && return 0
+  fi
+  if command -v perl >/dev/null 2>&1; then
+    perl -MEncode -0777 -e 'my ($enc, $file) = @ARGV; open my $fh, "<:raw", $file or exit 1; local $/; my $raw = <$fh>; my $text = Encode::decode($enc, $raw, Encode::FB_DEFAULT); $text =~ s/^\x{FEFF}//; print $text;' "$enc" "$f" 2>/dev/null && return 0
+  fi
+  return 1
+}
+
+strip_status_line_bom() {  # <line>
+  local line=$1
+  case "$line" in
+    $'\xef\xbb\xbf'*) line=${line#$'\xef\xbb\xbf'} ;;
+  esac
+  printf '%s' "$line"
+}
+
 # Return the last non-blank line of a status file (empty if missing/blank).
+# On native Windows, strip only a genuine leading UTF-8 BOM and decode UTF-16
+# only when the file's bytes prove it by BOM or by null-byte code-unit pattern.
+# On POSIX, keep the historical plain grep/tail read path byte-identical.
 last_status_line() {
-  local f=$1
+  local f=$1 line enc
   [ -e "$f" ] || return 0
+  if fm_platform_is_windows; then
+    enc=$(status_file_utf16_encoding "$f")
+    if [ -n "$enc" ]; then
+      line=$(decode_status_file_utf16 "$enc" "$f" | grep -v '^[[:space:]]*$' | tail -1)
+    else
+      line=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1)
+    fi
+    printf '%s\n' "$(strip_status_line_bom "$line")"
+    return 0
+  fi
   grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1
 }
 
 # 0 if the given (last) status line matches a captain-relevant verb.
 status_is_captain_relevant() {
   local line=$1
+  if fm_platform_is_windows; then
+    line=$(strip_status_line_bom "$line")
+  fi
   [ -n "$line" ] || return 1
   status_is_paused "$line" && return 1
   printf '%s' "$line" | grep -qiE "${FM_CAPTAIN_RE:-$FM_CLASSIFY_CAPTAIN_RE_DEFAULT}"

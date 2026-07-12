@@ -96,11 +96,10 @@ fi
 
 # --- status log ------------------------------------------------------------
 
-# Last non-empty status line, and its leading verb (the word before the colon).
-log_last_line() {
-  [ -f "$LOG" ] || return 1
-  grep -v '^[[:space:]]*$' "$LOG" 2>/dev/null | tail -1
-}
+# Last non-empty status line, normalized by the shared reader, and its leading
+# verb (the word before the colon).
+# Use the shared classifier reader so native-Windows UTF-8 BOM and proven UTF-16
+# status logs are normalized before anchored verb extraction.
 log_verb_of() {  # <line>
   local v=${1%%:*}
   v="${v#"${v%%[![:space:]]*}"}"
@@ -133,7 +132,7 @@ map_log_state() {  # <line>
   esac
 }
 
-LOG_LINE=$(log_last_line || true)
+LOG_LINE=$(last_status_line "$LOG" || true)
 LOG_VERB=$(log_verb_of "$LOG_LINE")
 
 # pane_readable is consulted ONLY in the no-run fallback below. The run-step path

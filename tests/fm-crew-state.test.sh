@@ -878,6 +878,22 @@ test_no_run_idle_pane_uses_log() {
   pass "no run + idle pane uses the status-log verb"
 }
 
+test_windows_bom_prefixed_done_status_uses_log() {
+  reset_fakes
+  local d; d=$(new_case bom-done)
+  make_repo_on_branch "$d/wt" fm/feat-bom
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-bom.meta" "window=fm:fm-feat-bom" "worktree=$d/wt" "kind=ship"
+  printf '\357\273\277done: Windows PowerShell status\n' > "$d/state/feat-bom.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_BUSY=0
+  local out; out=$(FM_PLATFORM_IS_WINDOWS=yes run_crew_state "$d" feat-bom)
+  assert_contains "$out" "state: done" "forced-Windows BOM-prefixed done log -> done"
+  assert_contains "$out" "source: status-log" "forced-Windows BOM-prefixed done log -> status-log source"
+  assert_contains "$out" "Windows PowerShell status" "forced-Windows BOM-prefixed done detail preserved"
+  pass "forced-Windows BOM-prefixed done status uses the shared normalized status-log reader"
+}
+
 # (g') no run + idle pane on a DECLARED external-wait pause -> state: paused, so a
 # supervisor reading the crew sees a distinct pause (and its reason) rather than a
 # wedge-suspect idle. This is the reader half the watcher/daemon build on.
@@ -1122,6 +1138,7 @@ test_no_run_herdr_unknown_uses_backend_capture
 test_no_run_herdr_idle_agent_status_corroborated_by_busy_pane
 test_no_run_herdr_idle_agent_status_and_idle_pane_stays_idle
 test_no_run_idle_pane_uses_log
+test_windows_bom_prefixed_done_status_uses_log
 test_no_run_idle_pane_paused
 test_no_run_idle_pane_custom_paused_verb
 test_dead_window_ignores_stale_status_log
