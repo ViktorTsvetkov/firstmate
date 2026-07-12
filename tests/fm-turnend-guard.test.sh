@@ -151,6 +151,12 @@ run_hook() {
   printf '{"stop_hook_active":%s}' "$stop_active" | CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1
 }
 
+run_hook_platform() {
+  local dir=$1 stop_active=$2 platform=$3 home
+  home=$(cd "$dir" && pwd)
+  printf '{"stop_hook_active":%s}' "$stop_active" | CLAUDECODE=1 FM_HOME="$home" FM_PLATFORM_IS_WINDOWS="$platform" bash "$dir/bin/fm-turnend-guard.sh" 2>&1
+}
+
 nonexistent_pid() {
   local pid=999999
   while kill -0 "$pid" 2>/dev/null; do
@@ -283,12 +289,34 @@ test_hook_silent_during_afk_with_live_daemon_and_fresh_beacon() {
   }
   record_supervise_daemon_lock "$dir" "$pid" "$identity"
   touch "$dir/state/.last-watcher-beat"
-  out=$(run_hook "$dir" false); status=$?
+  out=$(run_hook_platform "$dir" false yes); status=$?
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   expect_code 0 "$status" "hook must exit 0 while afk is supervised by a live daemon with a fresh beacon"
   [ -z "$out" ] || fail "hook produced output during healthy afk supervision: $out"
-  pass "fm-turnend-guard: silent no-op during afk with live supervise-daemon and fresh beacon"
+  pass "fm-turnend-guard: Windows silent no-op during afk with live supervise-daemon and fresh beacon"
+}
+
+test_hook_blocks_during_posix_afk_daemon_restart_gap() {
+  local dir identity out pid status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-afk-posix-restart-gap")
+  : > "$dir/state/task1.meta"
+  date '+%s' > "$dir/state/.afk"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "could not identify live daemon holder"
+  }
+  record_supervise_daemon_lock "$dir" "$pid" "$identity"
+  touch "$dir/state/.last-watcher-beat"
+  out=$(run_hook_platform "$dir" false no); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "POSIX hook must block during an afk daemon restart gap"
+  assert_contains "$out" "Away mode owns watcher supervision" "POSIX restart-gap block must emit the upstream away-mode guard reason"
+  pass "fm-turnend-guard: POSIX afk live-daemon restart gap blocks with away-mode guard"
 }
 
 test_hook_blocks_from_fm_home_state() {
@@ -763,6 +791,7 @@ test_hook_silent_with_live_lock_and_fresh_beacon
 test_hook_blocks_with_live_lock_and_stale_beacon
 test_hook_blocks_when_unhealthy_in_primary
 test_hook_silent_during_afk_with_live_daemon_and_fresh_beacon
+test_hook_blocks_during_posix_afk_daemon_restart_gap
 test_hook_blocks_from_fm_home_state
 test_hook_x_mode_reason_sources_cadence
 test_hook_ignores_repo_state_when_fm_home_set

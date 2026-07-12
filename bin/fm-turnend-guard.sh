@@ -41,6 +41,8 @@ WATCH="$SCRIPT_DIR/fm-watch.sh"
 
 # shellcheck source=bin/fm-supervision-lib.sh
 . "$SCRIPT_DIR/fm-supervision-lib.sh"
+# shellcheck source=bin/fm-platform-lib.sh
+. "$SCRIPT_DIR/fm-platform-lib.sh"
 
 # Read the whole turn-end hook payload once; never block on unreadable/absent
 # stdin.
@@ -86,7 +88,9 @@ x_mode=0
 [ -f "$CONFIG/x-mode.env" ] && x_mode=1
 reason_status=0
 REASON=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --afk "$afk" --x-mode "$x_mode" --repair-line 2>/dev/null) || reason_status=$?
-[ "$reason_status" -eq 1 ] && exit 0
+if [ "$reason_status" -eq 1 ] && fm_platform_is_windows; then
+  exit 0
+fi
 [ -n "$REASON" ] || REASON='tasks in flight, no live watcher - resume supervision according to the session-start operating block before ending the turn'
 rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
 {

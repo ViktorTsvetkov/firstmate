@@ -11,6 +11,9 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 DOC_DIR="$REPO_ROOT/docs/supervision-protocols"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
+# shellcheck source=bin/fm-platform-lib.sh
+. "$SCRIPT_DIR/fm-platform-lib.sh"
+
 HARNESS=
 READ_ONLY=0
 AFK=0
@@ -123,7 +126,7 @@ repair_line() {
   if [ "$AFK" -eq 1 ]; then
     # If away mode is actively supervised by a fresh daemon, there is nothing
     # for the turn-end guard to repair.
-    if afk_supervision_healthy; then
+    if fm_platform_is_windows && afk_supervision_healthy; then
       return 1
     fi
     printf '%s\n' 'Away mode owns watcher supervision; load /afk and ensure the daemon is running instead of starting normal supervision directly.'
