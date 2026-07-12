@@ -41,7 +41,6 @@ set -u
 LOG="${FM_HERDR_LOG:?}"
 RESP="${FM_HERDR_RESPONSES:?}"
 COUNT_FILE="$RESP/.count"
-next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
 {
   printf 'HERDR_SESSION=%s' "${HERDR_SESSION:-}"
   for a in "$@"; do printf '\x1f%s' "$a"; done
@@ -51,6 +50,12 @@ if [ "${1:-}" = status ] && [ "${2:-}" = --json ] && [ "${FM_HERDR_SCRIPT_STATUS
   printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n'
   exit 0
 fi
+LOCK_DIR="$RESP/.count.lock"
+while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+  sleep 0.01
+done
+trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
 n=$next
 echo "$n" > "$COUNT_FILE"
 if [ -f "$RESP/$n.exit" ]; then
