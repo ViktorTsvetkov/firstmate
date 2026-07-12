@@ -1,15 +1,19 @@
 # Per-repo no-mistakes overrides.
 
-# Run the firstmate bash behavior suite deterministically as the test-step
-# baseline, instead of delegating to an agent (an agent-driven test step has
-# crashed the daemon). Mirrors .github/workflows/ci.yml: iterate every
-# tests/*.test.sh, run each, and fail the step if any one exits non-zero.
-# The POSIX path keeps the original tmux preflight exactly, so Linux/macOS gate
-# behavior stays byte-for-byte unchanged.
-# The Windows batch path has no hard tmux preflight: tests that genuinely need
-# tmux self-skip when it is absent, so the native-Windows local gate can run on a
-# tmux-less box while ubuntu CI keeps full e2e coverage.
+# Pin lint and test to the SAME deterministic commands CI runs, instead of
+# leaving them to no-mistakes' default handling. Without a configured
+# commands.lint, the gate's lint step never ran the deterministic
+# `shellcheck bin/*.sh bin/backends/*.sh tests/*.sh` that CI runs, so info-level
+# ShellCheck findings (e.g. SC2015) were not surfaced locally before CI rejected
+# them. commands.lint delegates to bin/fm-lint.sh, the single owner of the lint
+# definition that .github/workflows/ci.yml also invokes, so local can never
+# diverge from CI again (parity asserted by tests/fm-lint.test.sh).
+# The POSIX test path keeps the upstream tmux preflight exactly. The Windows batch
+# path has no hard tmux preflight: tests that genuinely need tmux self-skip when
+# it is absent, so the native-Windows local gate can run on a tmux-less box while
+# ubuntu CI keeps full e2e coverage.
 commands:
+  lint: 'bin/fm-lint.sh'
   # Cross-shell dispatch (STRICT ADDITIVE). no-mistakes runs `commands.test` via
   # `sh` on Linux/macOS but via `cmd` / a temp `.bat` on Windows, where the POSIX
   # one-liner errors ('rc' is not recognized) and PATH `bash` may be WSL (which
