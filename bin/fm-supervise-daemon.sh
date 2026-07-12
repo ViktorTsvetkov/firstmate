@@ -163,13 +163,14 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$FM_DAEMON_DIR/fm-classify-lib.sh"
 
+# Supervisor-pane discovery (FM_SUPERVISOR_TARGET_DEFAULT,
+# FM_SUPERVISOR_BACKEND_DEFAULT, discover_supervisor_target,
+# discover_supervisor_backend). Shared with the script-owned away launcher
+# (bin/fm-afk-launch.sh) so the captain-pane resolution has exactly one owner.
+# shellcheck source=bin/fm-supervisor-target-lib.sh
+. "$FM_DAEMON_DIR/fm-supervisor-target-lib.sh"
+
 # --- tunables ---------------------------------------------------------------
-FM_SUPERVISOR_TARGET_DEFAULT="firstmate:0"
-# Fallback BACKEND paired with the fallback target above: "firstmate:0" is a
-# tmux session:window name, so the bare fallback (nothing configured, nothing
-# detected) assumes tmux - matching this daemon's pre-herdr-support behavior
-# byte-for-byte when run outside both tmux and herdr.
-FM_SUPERVISOR_BACKEND_DEFAULT="tmux"
 # Supervisor backends this daemon knows how to inject into today. zellij, orca,
 # and cmux are real backends elsewhere in firstmate (bin/fm-backend.sh) but this
 # daemon has no verified composer/busy primitives wired up for them yet - see
