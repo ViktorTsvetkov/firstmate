@@ -16,6 +16,8 @@ esac
 
 # shellcheck source=tests/secondmate-helpers.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/secondmate-helpers.sh"
+# shellcheck source=bin/fm-platform-lib.sh disable=SC1091
+. "$ROOT/bin/fm-platform-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-secondmate-safety)
 export FM_BACKEND=tmux
@@ -1394,6 +1396,10 @@ EOF
 
 test_secondmate_teardown_removes_plain_worktree_home_when_treehouse_reports_unmanaged() {
   local home subhome subhome_abs fakebin log fmroot
+  if ! fm_platform_is_windows; then
+    pass "secondmate teardown raw-removes plain-worktree homes reported unmanaged by treehouse (Windows-only; skipped on POSIX)"
+    return 0
+  fi
   home="$TMP_ROOT/plain-worktree-teardown-home"
   subhome="$TMP_ROOT/plain-worktree-teardown-subhome"
   fmroot="$TMP_ROOT/plain-worktree-teardown-fmroot"

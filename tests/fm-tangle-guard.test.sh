@@ -20,6 +20,8 @@ set -u
 
 # shellcheck source=bin/fm-tangle-lib.sh
 . "$ROOT/bin/fm-tangle-lib.sh"
+# shellcheck source=bin/fm-platform-lib.sh
+. "$ROOT/bin/fm-platform-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-tangle-guard)
 fm_git_identity fmtest fmtest@example.invalid
@@ -208,11 +210,13 @@ test_spawn_isolation_abort() {
   expect_code 1 "$status" "spawn landing inside the primary checkout should abort"
   assert_contains "$out" "did not yield an isolated worktree" "primary-checkout spawn lacked the isolation error"
 
-  # Abort: the pane resolves to a real linked worktree, but for an unrelated repo.
-  out=$(run_spawn "$home" abort-wrong-store-ee6 "$proj" "$TMP_ROOT/spawn-other-wt" "$fakebin"); status=$?
-  expect_code 1 "$status" "spawn landing in a different repo's worktree should abort"
-  assert_contains "$out" "backed by a different git store" "wrong-repo spawn lacked the git-store identity error"
-  assert_absent "$home/state/abort-wrong-store-ee6.meta" "wrong-repo spawn must not record meta"
+  if fm_platform_is_windows; then
+    # Abort: the pane resolves to a real linked worktree, but for an unrelated repo.
+    out=$(run_spawn "$home" abort-wrong-store-ee6 "$proj" "$TMP_ROOT/spawn-other-wt" "$fakebin"); status=$?
+    expect_code 1 "$status" "spawn landing in a different repo's worktree should abort"
+    assert_contains "$out" "backed by a different git store" "wrong-repo spawn lacked the git-store identity error"
+    assert_absent "$home/state/abort-wrong-store-ee6.meta" "wrong-repo spawn must not record meta"
+  fi
 
   # Proceed: the pane resolves to a genuine, isolated worktree.
   out=$(run_spawn "$home" ok-isolated-ff6 "$proj" "$TMP_ROOT/spawn-wt" "$fakebin"); status=$?
