@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# (dry-run validation: no-mistakes WSL pipeline smoke — safe to close)
 # Small platform seam for OS checks and Windows/Git-Bash substrate helpers.
 
 FM_PLATFORM_UNAME="${FM_PLATFORM_UNAME:-}"
