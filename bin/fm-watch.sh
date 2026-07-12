@@ -191,6 +191,14 @@ window_is_busy() {  # <window> <tail40>
   esac
 }
 
+refresh_windows_herdr_beacon() {  # <backend>
+  # Native Windows herdr pane reads can be slow enough across several tasks to
+  # make the poll-boundary beacon look stale before the cycle completes.
+  [ "$1" = herdr ] || return 0
+  fm_platform_is_windows || return 0
+  touch "$STATE/.last-watcher-beat"
+}
+
 window_kind() {
   local w=$1 meta kind
   meta=$(fm_backend_meta_for_window "$w" "$STATE" 2>/dev/null || true)
@@ -729,7 +737,10 @@ EOF
     if [ "$kind" = secondmate ] && ! status_is_paused "$last"; then
       continue
     fi
-    tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null) || continue
+    backend=$(window_backend "$w")
+    refresh_windows_herdr_beacon "$backend"
+    tail40=$(fm_backend_capture "$backend" "$w" 40 "$(window_label "$w")" 2>/dev/null) || continue
+    refresh_windows_herdr_beacon "$backend"
     h=$(printf '%s' "$tail40" | hash_pane)
     key=$(printf '%s' "$w" | tr ':/.' '___')
     hf="$STATE/.hash-$key"

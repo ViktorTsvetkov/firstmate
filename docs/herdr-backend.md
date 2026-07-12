@@ -167,6 +167,10 @@ Task-selector resolution is the shared contract owned by [`docs/configuration.md
 For `fm-peek.sh`, an unrecorded three-field explicit target such as `<herdr-session>:<workspace>:<pane>` infers herdr only when herdr is active through `FM_BACKEND=herdr`, `config/backend`, or runtime auto-detection.
 Plain POSIX unmatched explicit targets retain the legacy tmux compatibility path.
 
+On native Windows, the watcher refreshes `state/.last-watcher-beat` before and after each herdr-backed pane capture during stale-pane scans.
+This keeps cycles that supervise multiple slow `herdr pane read` calls from tripping the guard or arm stale check before the next poll boundary.
+POSIX and non-herdr watcher paths keep the normal poll-boundary beacon behavior.
+
 Herdr tasks additionally record:
 
 - `herdr_session=` - the named herdr session this task's server lives in.

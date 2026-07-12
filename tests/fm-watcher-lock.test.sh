@@ -677,6 +677,104 @@ SH
   pass "Windows arm waits long enough for a slow first watcher beacon"
 }
 
+test_windows_herdr_poll_refreshes_beacon_between_slow_reads() {
+  local dir state fakebin out err capture_file read_log pid i reads m age now
+  dir=$(make_case windows-herdr-slow-poll-beacon)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  err="$dir/watch.err"
+  capture_file="$dir/pane.txt"
+  read_log="$dir/herdr-reads.log"
+  printf 'idle prompt\n' > "$capture_file"
+  printf 'window=test:w1:p1\nbackend=herdr\nkind=ship\n' > "$state/one.meta"
+  printf 'window=test:w1:p2\nbackend=herdr\nkind=ship\n' > "$state/two.meta"
+  cat > "$fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  status)
+    printf '{"server":{"running":true}}\n'
+    exit 0
+    ;;
+  pane)
+    case "${2:-}" in
+      read)
+        printf '%s\n' "$(date +%s) ${3:-}" >> "${FM_FAKE_HERDR_READ_LOG:?}"
+        sleep "${FM_FAKE_HERDR_READ_SLEEP:-0}"
+        cat "${FM_FAKE_HERDR_CAPTURE:?}"
+        exit 0
+        ;;
+      get)
+        printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}"
+        exit 0
+        ;;
+    esac
+    ;;
+  agent)
+    if [ "${2:-}" = get ]; then
+      printf '{"result":{"agent":{"agent_status":"idle"}}}\n'
+      exit 0
+    fi
+    ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/herdr"
+  cat > "$fakebin/jq" <<'SH'
+#!/usr/bin/env bash
+set -u
+expr=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -r|-e) shift; continue ;;
+    --arg) shift 3; continue ;;
+    *) expr=$1; shift; break ;;
+  esac
+done
+case "$expr" in
+  *'.server.running'*) printf 'true\n' ;;
+  *'.result.agent.agent_status'*) printf 'idle\n' ;;
+  *'.result.pane.pane_id'*) printf 'w1:p1\n' ;;
+  *) cat >/dev/null; exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/jq"
+
+  PATH="$fakebin:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HOME="$dir" FM_FAKE_HERDR_CAPTURE="$capture_file" \
+    FM_FAKE_HERDR_READ_LOG="$read_log" FM_FAKE_HERDR_READ_SLEEP=2 FM_POLL=5 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" 2> "$err" &
+  pid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    if [ -f "$read_log" ]; then
+      reads=$(wc -l < "$read_log" | tr -d '[:space:]')
+    else
+      reads=0
+    fi
+    [ "${reads:-0}" -ge 2 ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if [ -f "$read_log" ]; then
+    reads=$(wc -l < "$read_log" | tr -d '[:space:]')
+  else
+    reads=0
+  fi
+  [ "${reads:-0}" -ge 2 ] || { kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fail "watcher did not reach the second slow herdr read"; }
+  if [ "$(uname)" = Darwin ]; then
+    m=$(stat -f %m "$state/.last-watcher-beat")
+  else
+    m=$(stat -c %Y "$state/.last-watcher-beat")
+  fi
+  now=$(date +%s)
+  age=$(( now - m ))
+  [ "$age" -lt 2 ] || { kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fail "Windows/herdr beacon was stale during slow pane polling (age ${age}s)"; }
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  pass "Windows/herdr watcher refreshes its beacon between slow pane reads"
+}
+
 test_arm_propagates_immediate_wake_before_confirmation() {
   local dir state fakebin armout drain_out check_file rc
   dir=$(make_case arm-immediate-wake)
@@ -872,6 +970,7 @@ test_arm_attaches_and_waits_for_live_fresh_watcher
 test_arm_starts_and_self_heals
 test_arm_hup_cleans_child_and_temp_output
 test_windows_arm_waits_for_slow_first_beacon
+test_windows_herdr_poll_refreshes_beacon_between_slow_reads
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down
 test_arm_fails_loud_when_no_fresh_watcher_confirmable
