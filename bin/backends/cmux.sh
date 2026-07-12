@@ -626,9 +626,13 @@ fm_backend_cmux_window_of_workspace() {  # <workspace_id> -> "<window_id> <count
       | select(any($workspaces[]?; .id == $id))
       | ($workspaces | length)
     ' 2>/dev/null) || continue
+    # Windows jq emits CRLF; strip the CR after the jq exit status is captured
+    # (a pipe into the strip would mask jq -e's no-match failure above). No-op on
+    # POSIX, where fm_backend_cmux_strip_windows_cr is a pass-through.
+    count=$(printf '%s' "$count" | fm_backend_cmux_strip_windows_cr)
     printf '%s %s' "$wid" "$count"
     return 0
-  done < <(printf '%s' "$wins" | jq -r '.[]? | .id' 2>/dev/null)
+  done < <(printf '%s' "$wins" | jq -r '.[]? | .id' 2>/dev/null | fm_backend_cmux_strip_windows_cr)
 }
 
 # fm_backend_cmux_kill: remove the task's whole workspace, best-effort (mirrors

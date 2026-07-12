@@ -70,6 +70,14 @@ jobs:
         with:
           fetch-depth: 0
       - name: Run Windows Git Bash subset
+        # The GitHub windows-latest Git Bash defaults to the C locale, under which
+        # bash treats multibyte glyphs (e.g. the composer prompt '❯', 3 UTF-8
+        # bytes) as raw bytes and breaks byte-vs-char string slicing in the shared
+        # composer logic. Pin a UTF-8 locale so this leg matches how every POSIX CI
+        # leg already runs; no shell code changes, POSIX unaffected.
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
         run: |
           set -eu
           # Empirically green under Git Bash on Windows as of Phase 1.
