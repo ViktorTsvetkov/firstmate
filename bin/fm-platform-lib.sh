@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # Small platform seam for OS checks and Windows/Git-Bash substrate helpers.
+#
+# Source this leaf helper when code needs OS detection, HOME/TMPDIR resolution,
+# or process-table fields that must tolerate MSYS/Cygwin fixed-column `ps`.
+# `fm_platform_is_windows` is the one narrow Windows branch point.
+# `FM_PLATFORM_UNAME`, `FM_PLATFORM_IS_WINDOWS`, and legacy `FM_IS_WINDOWS`
+# are test seams; production callers should leave them unset.
 
 FM_PLATFORM_UNAME="${FM_PLATFORM_UNAME:-}"
 fm_platform_uname() {

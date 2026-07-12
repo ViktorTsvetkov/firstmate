@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# tests/fm-platform-lib.test.sh - unit tests for the shared platform seam:
+# Windows detection overrides, HOME/TMPDIR fallbacks, locale-stable process
+# identity, and MSYS/Cygwin fixed-column `ps` parsing.
 set -u
 
 # shellcheck disable=SC1091
