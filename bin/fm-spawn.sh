@@ -27,6 +27,9 @@
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.
+#   Backends that create endpoints before later spawn assertions complete own
+#   their abort cleanup here; herdr closes its task pane until meta is committed,
+#   and Orca closes its terminal/worktree until the spawn succeeds.
 #   With no harness arg, a crewmate/scout spawn resolves the CREW harness only when
 #   config/crew-dispatch.json is absent. When that file exists, crewmate/scout
 #   spawns require an explicit harness so firstmate cannot silently skip dispatch
@@ -190,6 +193,8 @@ fi
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
+HERDR_ABORT_CLEANUP=0
+HERDR_ABORT_TARGET=
 
 parse_orca_worktree_result() {
   local raw=$1 rest
@@ -209,7 +214,7 @@ parse_orca_worktree_result() {
 }
 
 orca_spawn_abort_cleanup() {
-  local status=$?
+  local status=${SPAWN_ABORT_STATUS:-$?}
   [ "$ORCA_ABORT_CLEANUP" = 1 ] || return "$status"
   ORCA_ABORT_CLEANUP=0
   if [ -n "${ORCA_TERMINAL:-}" ]; then
@@ -239,7 +244,17 @@ orca_spawn_abort_cleanup() {
   fi
   return "$status"
 }
-trap orca_spawn_abort_cleanup EXIT
+
+herdr_spawn_abort_cleanup() {
+  local status=${SPAWN_ABORT_STATUS:-$?}
+  [ "$HERDR_ABORT_CLEANUP" = 1 ] || return "$status"
+  HERDR_ABORT_CLEANUP=0
+  if [ -n "${HERDR_ABORT_TARGET:-}" ]; then
+    fm_backend_kill herdr "$HERDR_ABORT_TARGET" 2>/dev/null || true
+  fi
+  return "$status"
+}
+trap 'SPAWN_ABORT_STATUS=$?; set +e; orca_spawn_abort_cleanup; herdr_spawn_abort_cleanup; exit "$SPAWN_ABORT_STATUS"' EXIT
 
 # Batch dispatch (see header): when the first positional is an `id=repo` pair, treat every
 # positional as one and spawn each by re-execing this script in single-task mode. We use
@@ -747,6 +762,8 @@ EOF
       exit 1
     fi
     T="$HERDR_SES:$HERDR_PANE_ID"
+    HERDR_ABORT_TARGET=$T
+    HERDR_ABORT_CLEANUP=1
     ;;
   zellij)
     ZELLIJ_SES=$(fm_backend_zellij_container_ensure) || exit 1
@@ -1040,6 +1057,7 @@ META_WINDOW=$T
   fi
 } > "$STATE/$ID.meta"
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
+[ "$BACKEND" = herdr ] && HERDR_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")

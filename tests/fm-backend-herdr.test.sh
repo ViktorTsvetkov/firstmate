@@ -330,6 +330,61 @@ test_container_ensure_reuses_existing_workspace() {
   pass "fm_backend_herdr_container_ensure: reuses an existing firstmate workspace without recreating it, and reports no seeded default tab (adopted, not created)"
 }
 
+test_server_ready_rejects_incompatible_server() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/server-incompatible"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"server":{"running":true,"compatible":false,"restart_needed":false}}\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "server_ensure should reject a running but incompatible herdr server"
+  assert_contains "$out" "incompatible protocol" "server_ensure should explain stale-server refusal"
+  assert_not_contains "$(cat "$log")" $'\x1f''server' "server_ensure must not start another server when a stale server is already running"
+  pass "fm_backend_herdr_server_ensure: rejects present compatible=false stale servers"
+}
+
+test_server_ready_accepts_absent_compatible_field() {
+  local dir log resp fb
+  dir="$TMP_ROOT/server-absent-compatible"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"server":{"running":true}}\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT" \
+    || fail "server_ensure should accept older herdr status output with no compatible field"
+  assert_not_contains "$(cat "$log")" $'\x1f''server' "server_ensure should not start a server when running=true and compatible is absent"
+  pass "fm_backend_herdr_server_ensure: absent compatible field remains pass-through"
+}
+
+test_workspace_create_converts_cwd_only_on_windows() {
+  local dir log resp fb cyg
+  dir="$TMP_ROOT/cwd-convert"; mkdir -p "$dir/responses" "$dir/fakebin"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  cyg="$dir/fakebin/cygpath"
+  cat > "$cyg" <<'SH'
+#!/usr/bin/env bash
+if [ "$1" = -w ]; then printf 'C:\\repo\\proj\n'; else printf '%s\n' "$2"; fi
+SH
+  chmod +x "$cyg"
+  printf '{"result":{"workspaces":[]}}\n' > "$resp/1.out"
+  printf '{"result":{"workspace":{"workspace_id":"w1"},"tab":{"tab_id":"w1:t1"}}}\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$dir/fakebin:$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_ensure fmtest /c/repo/proj >/dev/null' "$ROOT" \
+    || fail "workspace_ensure should accept converted Windows cwd"
+  assert_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''create'$'\x1f''--cwd'$'\x1f''C:\repo\proj' \
+    "forced-Windows workspace create should pass cygpath -w cwd"
+
+  : > "$log"; rm -f "$resp"/*.out "$resp/.count"
+  printf '{"result":{"workspaces":[]}}\n' > "$resp/1.out"
+  printf '{"result":{"workspace":{"workspace_id":"w1"},"tab":{"tab_id":"w1:t1"}}}\n' > "$resp/2.out"
+  PATH="$dir/fakebin:$fb:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_ensure fmtest /c/repo/proj >/dev/null' "$ROOT" \
+    || fail "workspace_ensure should preserve POSIX cwd"
+  assert_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''create'$'\x1f''--cwd'$'\x1f''/c/repo/proj' \
+    "forced-POSIX workspace create should preserve cwd literally"
+  pass "fm_backend_herdr_workspace_ensure: Windows cwd conversion is gated"
+}
+
 test_create_task_refuses_duplicate_label() {
   local dir log resp fb out status
   dir="$TMP_ROOT/dup-task"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -718,6 +773,17 @@ test_capture_works_around_small_lines_bug() {
   assert_contains "$(cat "$log")" $'\x1f''--lines'$'\x1f''200' \
     "capture should request a generous fetch (>=200), never the caller's small N, from herdr's own --lines flag"
   pass "fm_backend_herdr_capture: works around the verified small-N '--lines' bug by over-fetching and trimming locally"
+}
+
+test_capture_strips_windows_crlf() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/capture-windows-crlf"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf 'line one\r\nline two\r\nline three\r\nline four\r\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_capture default:w1:p2 2' "$ROOT" )
+  [ "$out" = $'line three\nline four' ] || fail "forced-Windows capture should strip CRLF, got '$out'"
+  pass "fm_backend_herdr_capture: forced-Windows strips CRLF from pane reads"
 }
 
 test_capture_preserves_pane_read_failure() {
@@ -1989,6 +2055,9 @@ test_workspace_label_different_secondmates_get_different_labels
 test_cli_helper_sets_env_and_appends_trailing_session_flag
 test_container_ensure_starts_server_and_workspace
 test_container_ensure_reuses_existing_workspace
+test_server_ready_rejects_incompatible_server
+test_server_ready_accepts_absent_compatible_field
+test_workspace_create_converts_cwd_only_on_windows
 test_container_ensure_creates_with_no_focus_flag
 test_container_ensure_uses_secondmate_home_label
 test_workspace_ensure_prunes_default_tab
@@ -2014,6 +2083,7 @@ test_parse_target
 test_normalize_key
 test_capture_calls_pane_read
 test_capture_works_around_small_lines_bug
+test_capture_strips_windows_crlf
 test_capture_preserves_pane_read_failure
 test_send_key_normalizes_and_targets_pane
 test_kill_is_best_effort

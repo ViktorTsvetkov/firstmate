@@ -46,6 +46,8 @@
 # fm_backend_herdr_workspace_label falls through to "firstmate" exactly like
 # pre-P3 behavior when a test does not care about home-specific labeling).
 FM_BACKEND_HERDR_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=bin/fm-platform-lib.sh
+. "$FM_BACKEND_HERDR_ROOT/bin/fm-platform-lib.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_BACKEND_HERDR_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
@@ -129,6 +131,88 @@ fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
   HERDR_SESSION="$session" herdr "$@" --session "$session"
 }
 
+fm_backend_herdr_cwd_arg() {  # <posix-cwd>
+  local cwd=$1
+  if fm_platform_is_windows; then
+    cygpath -w "$cwd"
+  else
+    printf '%s' "$cwd"
+  fi
+}
+
+fm_backend_herdr_shell_arg() {
+  local shell_path
+  if fm_platform_is_windows; then
+    shell_path=$(command -v bash 2>/dev/null || printf '%s' /usr/bin/bash)
+    cygpath -w -s "$shell_path"
+    return
+  fi
+  shell_path=${SHELL:-}
+  if [ -z "$shell_path" ]; then
+    shell_path=$(command -v bash 2>/dev/null || command -v sh 2>/dev/null || true)
+  fi
+  [ -n "$shell_path" ] || return 0
+  printf '%s' "$shell_path"
+}
+
+fm_backend_herdr_windows_strip_cr() {
+  if fm_platform_is_windows; then
+    tr -d '\r'
+  else
+    cat
+  fi
+}
+
+fm_backend_herdr_server_start() {  # <session>
+  local session=$1 pid
+  if fm_platform_is_windows; then
+    # shellcheck disable=SC2016 # The inner bash expands $1 after nohup detaches.
+    nohup bash -c 'HERDR_SESSION="$1" herdr server --session "$1" >/dev/null 2>&1' _ "$session" >/dev/null 2>&1 &
+    pid=$!
+    disown "$pid" 2>/dev/null || true
+    return 0
+  fi
+  ( fm_backend_herdr_cli "$session" server >/dev/null 2>&1 & ) || return 1
+}
+
+fm_backend_herdr_workspace_count() {  # <session>
+  local session=$1 out count
+  out=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 1
+  count=$(printf '%s' "$out" | jq -r '.result.workspaces? // [] | length' 2>/dev/null)
+  count=$(printf '%s' "$count" | fm_backend_herdr_windows_strip_cr)
+  case "$count" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$count"
+}
+
+fm_backend_herdr_windows_kill_server_processes() {  # <session>
+  local session=$1
+  fm_platform_is_windows || return 0
+  [ -n "$session" ] || return 0
+  [ "$session" != "$(fm_backend_herdr_session)" ] || return 0
+  # shellcheck disable=SC2016 # The embedded PowerShell expands its own variables.
+  FM_HERDR_RELEASE_SESSION="$session" powershell.exe -NoProfile -Command '
+$Session = $env:FM_HERDR_RELEASE_SESSION
+$escaped = [regex]::Escape($Session)
+$pattern = "(?i)herdr\.exe\s+server\s+--session\s+$escaped(\s|$)"
+Get-CimInstance Win32_Process -Filter "name = '\''herdr.exe'\''" |
+  Where-Object { $_.CommandLine -match $pattern } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+' >/dev/null 2>&1 || true
+}
+
+fm_backend_herdr_release_session_if_empty() {  # <session>
+  local session=$1 count
+  fm_platform_is_windows || return 0
+  [ -n "$session" ] || return 0
+  [ "$session" != "$(fm_backend_herdr_session)" ] || return 0
+  count=$(fm_backend_herdr_workspace_count "$session" 2>/dev/null || true)
+  [ "$count" = 0 ] || return 0
+  herdr session stop "$session" --session "$session" --json >/dev/null 2>&1 || true
+  sleep 0.5
+  herdr session delete "$session" --session "$session" --json >/dev/null 2>&1 || true
+  fm_backend_herdr_windows_kill_server_processes "$session"
+}
+
 # fm_backend_herdr_tool_check: refuse loudly if herdr or jq is missing.
 fm_backend_herdr_tool_check() {
   command -v herdr >/dev/null 2>&1 || { echo "error: backend=herdr selected but the 'herdr' CLI is not installed (https://herdr.dev) (dual-licensed AGPL-3.0-or-later/commercial)" >&2; return 1; }
@@ -144,6 +228,7 @@ fm_backend_herdr_version_check() {
   local status protocol version
   status=$(herdr status --json 2>/dev/null) || { echo "error: 'herdr status --json' failed; is herdr installed correctly?" >&2; return 1; }
   protocol=$(printf '%s' "$status" | jq -r '.client.protocol // empty' 2>/dev/null)
+  protocol=$(printf '%s' "$protocol" | fm_backend_herdr_windows_strip_cr)
   version=$(printf '%s' "$status" | jq -r '.client.version // empty' 2>/dev/null)
   case "$protocol" in
     ''|*[!0-9]*)
@@ -168,19 +253,38 @@ fm_backend_herdr_session() {
   printf '%s' "${HERDR_SESSION:-default}"
 }
 
+fm_backend_herdr_server_ready() {  # <session>
+  local session=$1 status running compatible restart_needed
+  status=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null) || return 1
+  running=$(printf '%s' "$status" | jq -r '.server.running // false' 2>/dev/null)
+  running=$(printf '%s' "$running" | fm_backend_herdr_windows_strip_cr)
+  [ "$running" = "true" ] || return 1
+  compatible=$(printf '%s' "$status" | jq -r 'if .server | has("compatible") then .server.compatible else empty end' 2>/dev/null)
+  compatible=$(printf '%s' "$compatible" | fm_backend_herdr_windows_strip_cr)
+  restart_needed=$(printf '%s' "$status" | jq -r '.server.restart_needed // false' 2>/dev/null)
+  restart_needed=$(printf '%s' "$restart_needed" | fm_backend_herdr_windows_strip_cr)
+  if [ "$compatible" = "false" ] || [ "$restart_needed" = "true" ]; then
+    echo "error: herdr server for session '$session' is running an incompatible protocol (restart required after a herdr update); firstmate will not drive a stale server" >&2
+    return 2
+  fi
+  return 0
+}
+
 # fm_backend_herdr_server_ensure: start the herdr server for <session>
 # headless (no TUI client) if not already running, mirroring tmux's `tmux
 # has-session || tmux new-session -d`. Verified: a bare socket CLI call does
 # NOT auto-start the server, so this must run before any workspace/tab/pane
 # call. Bounded poll for the server to report running.
 fm_backend_herdr_server_ensure() {  # <session>
-  local session=$1 running out i
-  running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
-  [ "$running" = "true" ] && return 0
-  ( fm_backend_herdr_cli "$session" server >/dev/null 2>&1 & ) || return 1
+  local session=$1 i ready_status
+  fm_backend_herdr_server_ready "$session"; ready_status=$?
+  [ "$ready_status" -eq 0 ] && return 0
+  [ "$ready_status" -eq 2 ] && return 1
+  fm_backend_herdr_server_start "$session" || return 1
   for i in $(seq 1 20); do
-    running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
-    [ "$running" = "true" ] && return 0
+    fm_backend_herdr_server_ready "$session"; ready_status=$?
+    [ "$ready_status" -eq 0 ] && return 0
+    [ "$ready_status" -eq 2 ] && return 1
     sleep 0.5
   done
   echo "error: herdr server for session '$session' did not report running within 10s" >&2
@@ -204,7 +308,7 @@ fm_backend_herdr_workspace_find() {  # <session>
   # ALWAYS return empty and every spawn mint a fresh "firstmate" workspace
   # (the workspace leak).
   printf '%s' "$list" | jq -r --arg want "$label" \
-    '.result.workspaces[]? | select(.label == $want) | .workspace_id' 2>/dev/null | head -1
+    '.result.workspaces[]? | select(.label == $want) | .workspace_id' 2>/dev/null | fm_backend_herdr_windows_strip_cr | head -1
 }
 
 # fm_backend_herdr_workspace_prune_seeded_default_tab: close EXACTLY
@@ -254,13 +358,16 @@ fm_backend_herdr_workspace_prune_seeded_default_tab() {  # <session> <workspace_
   [ -n "$tab_id" ] || return 0
   tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 0
   tab_count=$(printf '%s' "$tabs" | jq -r '.result.tabs? // [] | length' 2>/dev/null)
+  tab_count=$(printf '%s' "$tab_count" | fm_backend_herdr_windows_strip_cr)
   case "$tab_count" in ''|*[!0-9]*|0|1) return 0 ;; esac
   current_label=$(printf '%s' "$tabs" | jq -r --arg t "$tab_id" '.result.tabs[]? | select(.tab_id == $t) | .label' 2>/dev/null)
+  current_label=$(printf '%s' "$current_label" | fm_backend_herdr_windows_strip_cr)
   [ "$current_label" = "1" ] || return 0
   pane_id=$(fm_backend_herdr_pane_for_tab "$session" "$wsid" "$tab_id") || return 0
   [ -n "$pane_id" ] || return 0
   agent_out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null)
   agent_status=$(printf '%s' "$agent_out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
+  agent_status=$(printf '%s' "$agent_status" | fm_backend_herdr_windows_strip_cr)
   [ "$agent_status" = working ] && return 0
   fm_backend_herdr_cli "$session" pane close "$pane_id" >/dev/null 2>&1 || true
 }
@@ -303,7 +410,7 @@ fm_backend_herdr_workspace_prune_seeded_default_tab() {  # <session> <workspace_
 # attach to). --no-focus is passed unconditionally anyway, for defense in
 # depth and because it is a no-op in the already-safe case.
 fm_backend_herdr_workspace_ensure() {  # <session> <cwd>
-  local session=$1 cwd=$2 wsid out label
+  local session=$1 cwd=$2 wsid out label cwd_arg
   FM_BACKEND_HERDR_WS_ID=""
   FM_BACKEND_HERDR_WS_SEEDED_TAB_ID=""
   wsid=$(fm_backend_herdr_workspace_find "$session")
@@ -313,8 +420,10 @@ fm_backend_herdr_workspace_ensure() {  # <session> <cwd>
     return 0
   fi
   label=$(fm_backend_herdr_workspace_label)
-  out=$(fm_backend_herdr_cli "$session" workspace create --cwd "$cwd" --label "$label" --no-focus 2>/dev/null) || return 1
+  cwd_arg=$(fm_backend_herdr_cwd_arg "$cwd") || return 1
+  out=$(fm_backend_herdr_cli "$session" workspace create --cwd "$cwd_arg" --label "$label" --no-focus 2>/dev/null) || return 1
   wsid=$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
+  wsid=$(printf '%s' "$wsid" | fm_backend_herdr_windows_strip_cr)
   [ -n "$wsid" ] || return 1
   FM_BACKEND_HERDR_WS_ID=$wsid
   # Herdr seeds a new workspace with one auto-created default tab firstmate
@@ -325,6 +434,7 @@ fm_backend_herdr_workspace_ensure() {  # <session> <cwd>
   # once the first real task tab exists alongside it, and only ever targets
   # this exact captured tab_id.
   FM_BACKEND_HERDR_WS_SEEDED_TAB_ID=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
+  FM_BACKEND_HERDR_WS_SEEDED_TAB_ID=$(printf '%s' "$FM_BACKEND_HERDR_WS_SEEDED_TAB_ID" | fm_backend_herdr_windows_strip_cr)
   printf '%s' "$wsid"
 }
 
@@ -393,22 +503,26 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
   # distinction cannot afford to do.
   out=$(fm_backend_herdr_cli "$session" pane get "$pane_id" 2>&1)
   code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
+  code=$(printf '%s' "$code" | fm_backend_herdr_windows_strip_cr)
   if [ -n "$code" ]; then
     [ "$code" = "pane_not_found" ] && printf 'dead' || printf 'unknown'
     return 0
   fi
   pid=$(printf '%s' "$out" | jq -r '.result.pane.pane_id // empty' 2>/dev/null)
+  pid=$(printf '%s' "$pid" | fm_backend_herdr_windows_strip_cr)
   if [ "$pid" != "$pane_id" ]; then
     printf 'unknown'
     return 0
   fi
   out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>&1)
   code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
+  code=$(printf '%s' "$code" | fm_backend_herdr_windows_strip_cr)
   if [ -n "$code" ]; then
     [ "$code" = "agent_not_found" ] && printf 'no-agent' || printf 'unknown'
     return 0
   fi
   status=$(printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
+  status=$(printf '%s' "$status" | fm_backend_herdr_windows_strip_cr)
   case "$status" in
     working|idle|done|blocked) printf 'live' ;;
     *) printf 'unknown' ;;
@@ -425,6 +539,15 @@ fm_backend_herdr_tab_is_husk() {  # <session> <pane_id>
     dead|no-agent) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+fm_backend_herdr_close_partial_task() {  # <session> <tab_id> <pane_id>
+  local session=$1 tab_id=$2 pane_id=$3
+  if [ -n "$pane_id" ]; then
+    fm_backend_herdr_cli "$session" pane close "$pane_id" >/dev/null 2>&1 || true
+  elif [ -n "$tab_id" ]; then
+    fm_backend_herdr_cli "$session" tab close "$tab_id" >/dev/null 2>&1 || true
+  fi
 }
 
 # fm_backend_herdr_agent_alive: CONFIDENT liveness of a live harness-agent
@@ -493,7 +616,7 @@ fm_backend_herdr_agent_alive() {  # <target>
 # 4th arg, so this function never even queries for a prune candidate in that
 # case. Echoes "<tab_id> <pane_id>" on success.
 fm_backend_herdr_create_task() {  # <container> <label> <cwd> <seeded_default_tab_id>
-  local container=$1 label=$2 cwd=$3 seeded_tab_id=${4:-} session wsid list dup_tabs dup dup_pane dup_tab_ids out tab_id pane_id remaining_dup_tabs
+  local container=$1 label=$2 cwd=$3 seeded_tab_id=${4:-} session wsid list dup_tabs dup dup_pane dup_tab_ids out tab_id pane_id remaining_dup_tabs cwd_arg shell_arg
   session=${container%%:*}
   wsid=${container#*:}
   list=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 1
@@ -515,12 +638,30 @@ fm_backend_herdr_create_task() {  # <container> <label> <cwd> <seeded_default_ta
 $dup_tabs
 EOF
   fi
-  out=$(fm_backend_herdr_cli "$session" tab create --workspace "$wsid" --cwd "$cwd" --label "$label" --no-focus 2>/dev/null) || return 1
+  cwd_arg=$(fm_backend_herdr_cwd_arg "$cwd") || return 1
+  shell_arg=
+  if fm_platform_is_windows; then
+    shell_arg=$(fm_backend_herdr_shell_arg) || return 1
+  fi
+  if [ -n "$shell_arg" ] && fm_platform_is_windows; then
+    out=$(fm_backend_herdr_cli "$session" tab create --workspace "$wsid" --cwd "$cwd_arg" --label "$label" --no-focus --env "SHELL=$shell_arg" 2>/dev/null) || return 1
+  else
+    out=$(fm_backend_herdr_cli "$session" tab create --workspace "$wsid" --cwd "$cwd_arg" --label "$label" --no-focus 2>/dev/null) || return 1
+  fi
   tab_id=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
+  tab_id=$(printf '%s' "$tab_id" | fm_backend_herdr_windows_strip_cr)
   pane_id=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
+  pane_id=$(printf '%s' "$pane_id" | fm_backend_herdr_windows_strip_cr)
   if [ -z "$tab_id" ] || [ -z "$pane_id" ]; then
     echo "error: could not parse tab/pane id from herdr tab create output" >&2
+    fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
     return 1
+  fi
+  if [ -n "$shell_arg" ] && fm_platform_is_windows; then
+    fm_backend_herdr_cli "$session" pane run "$pane_id" "$shell_arg -l" >/dev/null 2>&1 || {
+      fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
+      return 1
+    }
   fi
   [ -z "$seeded_tab_id" ] || fm_backend_herdr_workspace_prune_seeded_default_tab "$session" "$wsid" "$seeded_tab_id"
   if [ -n "$dup_tab_ids" ]; then
@@ -532,10 +673,12 @@ $dup_tab_ids
 EOF
     list=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || {
       echo "error: could not verify herdr husk removal for tab '$label' in workspace $wsid (session $session)" >&2
+      fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
       return 1
     }
     if ! printf '%s' "$list" | jq -e '(.result.tabs | type) == "array"' >/dev/null 2>&1; then
       echo "error: could not parse herdr tab list output for workspace $wsid (session $session)" >&2
+      fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
       return 1
     fi
     remaining_dup_tabs=$(printf '%s' "$list" | jq -r --arg want "$label" --arg replacement "$tab_id" \
@@ -543,6 +686,7 @@ EOF
     remaining_dup_tabs=${remaining_dup_tabs//$'\n'/ }
     if [ -n "$remaining_dup_tabs" ]; then
       echo "error: failed to remove preexisting herdr tab(s) $remaining_dup_tabs for label '$label' in workspace $wsid (session $session)" >&2
+      fm_backend_herdr_close_partial_task "$session" "$tab_id" "$pane_id"
       return 1
     fi
   fi
@@ -556,6 +700,8 @@ fm_backend_herdr_parse_target() {  # <target>
   local target=$1
   FM_BACKEND_HERDR_SESSION=${target%%:*}
   FM_BACKEND_HERDR_PANE=${target#*:}
+  FM_BACKEND_HERDR_SESSION=$(printf '%s' "$FM_BACKEND_HERDR_SESSION" | fm_backend_herdr_windows_strip_cr)
+  FM_BACKEND_HERDR_PANE=$(printf '%s' "$FM_BACKEND_HERDR_PANE" | fm_backend_herdr_windows_strip_cr)
   [ -n "$FM_BACKEND_HERDR_SESSION" ] && [ -n "$FM_BACKEND_HERDR_PANE" ] && [ "$FM_BACKEND_HERDR_PANE" != "$target" ]
 }
 
@@ -577,7 +723,33 @@ fm_backend_herdr_target_ready() {  # <target>
 # process's cwd instead, which is what changes when `treehouse get` enters its
 # worktree subshell - confirmed live against a real treehouse acquisition.
 fm_backend_herdr_current_path() {  # <target>
+  local out line marker_begin="__FM_HERDR_CWD_BEGIN__" marker_end="__FM_HERDR_CWD_END__" in_block=0 chunk="" last=""
   fm_backend_herdr_target_ready "$1" || return 0
+  if fm_platform_is_windows; then
+    fm_backend_herdr_send_text_line "$1" "printf '%s\n' '$marker_begin'; pwd; printf '%s\n' '$marker_end'" || return 0
+    sleep 0.3
+    out=$(fm_backend_herdr_capture "$1" 200) || return 0
+    while IFS= read -r line; do
+      if [ "$line" = "$marker_begin" ]; then
+        in_block=1
+        chunk=""
+        continue
+      fi
+      if [ "$line" = "$marker_end" ]; then
+        case "$chunk" in
+          /*) last=$chunk ;;
+          ?:\\*) last=$(cygpath -u "$chunk") ;;
+        esac
+        in_block=0
+        continue
+      fi
+      [ "$in_block" -eq 1 ] && chunk="$chunk$line"
+    done <<EOF
+$out
+EOF
+    printf '%s' "$last"
+    return
+  fi
   fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
     | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null
 }
@@ -597,7 +769,11 @@ fm_backend_herdr_send_text_line() {  # <target> <text>
 # original guess); it behaves exactly like tmux's `-l` literal send.
 fm_backend_herdr_send_literal() {  # <target> <text>
   fm_backend_herdr_target_ready "$1" || return 1
-  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-text "$FM_BACKEND_HERDR_PANE" "$2" >/dev/null 2>&1
+  if fm_platform_is_windows; then
+    MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-text "$FM_BACKEND_HERDR_PANE" "$2" >/dev/null 2>&1
+  else
+    fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-text "$FM_BACKEND_HERDR_PANE" "$2" >/dev/null 2>&1
+  fi
 }
 
 # fm_backend_herdr_normalize_key: map firstmate's key vocabulary (Enter,
@@ -620,7 +796,11 @@ fm_backend_herdr_send_key() {  # <target> <key>
   fm_backend_herdr_target_ready "$1" || return 1
   local key
   key=$(fm_backend_herdr_normalize_key "$2")
-  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" "$key" >/dev/null 2>&1
+  if fm_platform_is_windows; then
+    MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" "$key" >/dev/null 2>&1
+  else
+    fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" "$key" >/dev/null 2>&1
+  fi
 }
 
 # fm_backend_herdr_capture: bounded plain-text pane capture. Mirrors
@@ -643,6 +823,7 @@ fm_backend_herdr_capture() {  # <target> <lines>
   fetch=$lines
   case "$fetch" in ''|*[!0-9]*) fetch=200 ;; *) [ "$fetch" -ge 200 ] || fetch=200 ;; esac
   out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane read "$FM_BACKEND_HERDR_PANE" --source recent --lines "$fetch" 2>/dev/null) || return 1
+  out=$(printf '%s' "$out" | fm_backend_herdr_windows_strip_cr)
   printf '%s' "$out" | tail -n "$lines"
 }
 
@@ -653,6 +834,7 @@ fm_backend_herdr_capture_ansi() {  # <target> <lines>
   fetch=$lines
   case "$fetch" in ''|*[!0-9]*) fetch=200 ;; *) [ "$fetch" -ge 200 ] || fetch=200 ;; esac
   out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane read "$FM_BACKEND_HERDR_PANE" --source recent --lines "$fetch" --format ansi 2>/dev/null) || return 1
+  out=$(printf '%s' "$out" | fm_backend_herdr_windows_strip_cr)
   printf '%s' "$out" | tail -n "$lines"
 }
 
@@ -880,6 +1062,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
 fm_backend_herdr_kill() {  # <target>
   fm_backend_herdr_target_ready "$1" || return 0
   fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane close "$FM_BACKEND_HERDR_PANE" >/dev/null 2>&1 || true
+  fm_backend_herdr_release_session_if_empty "$FM_BACKEND_HERDR_SESSION"
 }
 
 # fm_backend_herdr_classify_agent_status: map a raw `agent get` agent_status
@@ -918,7 +1101,7 @@ fm_backend_herdr_classify_submit_agent_status() {  # <raw-agent_status>
 fm_backend_herdr_agent_status_raw() {  # <session> <pane_id>
   local session=$1 pane_id=$2 out
   out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null) || { printf ''; return 0; }
-  printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null
+  printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null | fm_backend_herdr_windows_strip_cr
 }
 
 # fm_backend_herdr_busy_state: semantic busy state from herdr's native
@@ -1016,7 +1199,7 @@ fm_backend_herdr_pane_for_tab() {  # <session> <workspace_id> <tab_id>
   local session=$1 wsid=$2 tab_id=$3 panes
   panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$wsid" 2>/dev/null) || return 1
   printf '%s' "$panes" | jq -r --arg tab "$tab_id" \
-    '.result.panes[]? | select(.tab_id == $tab) | .pane_id' 2>/dev/null | head -1
+    '.result.panes[]? | select(.tab_id == $tab) | .pane_id' 2>/dev/null | fm_backend_herdr_windows_strip_cr | head -1
 }
 
 # fm_backend_herdr_resolve_bare_selector: the live-tab-listing fallback for an
@@ -1064,6 +1247,8 @@ fm_backend_herdr_list_live() {  # <session>
   [ -n "$wsid" ] || return 0
   tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 0
   while IFS=$'\t' read -r tab_id label; do
+    tab_id=$(printf '%s' "$tab_id" | fm_backend_herdr_windows_strip_cr)
+    label=$(printf '%s' "$label" | fm_backend_herdr_windows_strip_cr)
     [ -n "$tab_id" ] || continue
     pane_id=$(fm_backend_herdr_pane_for_tab "$session" "$wsid" "$tab_id") || continue
     [ -n "$pane_id" ] || continue
@@ -1093,6 +1278,7 @@ fm_backend_herdr_socket_path() {  # <session>
   local session=$1
   herdr session list --json 2>/dev/null \
     | jq -r --arg name "$session" '.sessions[]? | select(.name == $name) | .socket_path // empty' 2>/dev/null \
+    | fm_backend_herdr_windows_strip_cr \
     | head -1
 }
 
@@ -1116,6 +1302,7 @@ fm_backend_herdr_events_capable() {  # <session>
     command -v python3 >/dev/null 2>&1 || return 1
   fi
   protocol=$(herdr status --json 2>/dev/null | jq -r '.client.protocol // empty' 2>/dev/null)
+  protocol=$(printf '%s' "$protocol" | fm_backend_herdr_windows_strip_cr)
   case "$protocol" in ''|*[!0-9]*) return 1 ;; esac
   [ "$protocol" -ge "$FM_BACKEND_HERDR_MIN_EVENTS_PROTOCOL" ] || return 1
   schema=$(herdr api schema --json 2>/dev/null) || return 1
