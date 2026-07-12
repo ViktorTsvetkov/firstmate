@@ -69,15 +69,16 @@ SH
 }
 
 # make_herdr_statefake: a STATEFUL `herdr` stub that models the parts of herdr's
-# real container behavior the workspace-leak fix (and the default-tab-prune
-# safety fix) depend on, so a full spawn->teardown cycle can be replayed
-# repeatedly and the "one persistent firstmate workspace, no orphans"
+# real server/container behavior the server-start, workspace-leak, and
+# default-tab-prune safety tests depend on, so a full spawn->teardown cycle can
+# be replayed repeatedly and the "one persistent firstmate workspace, no orphans"
 # invariant asserted end to end (the canned, call-numbered make_herdr_fakebin
 # above cannot model state carried ACROSS calls). Backed by a JSON state file
 # ($FM_FAKE_HERDR_STATE) mutated with real jq. Modeled behaviors, all
-# verified real-herdr facts recorded in docs/herdr-backend.md: `workspace
-# create` seeds the new workspace with one auto-created default tab (label
-# "1") and returns that tab's tab_id/pane_id in the SAME response
+# verified real-herdr facts recorded in docs/herdr-backend.md: `status --json`
+# reports whether the session server is running; `server` marks it running;
+# `workspace create` seeds the new workspace with one auto-created default tab
+# (label "1") and returns that tab's tab_id/pane_id in the SAME response
 # (`.result.tab.tab_id` / `.result.root_pane.pane_id`, verified empirically
 # against the real binary); `pane close` removes the pane's single-pane tab
 # (closing a tab's only pane closes the tab); `workspace list` / `tab list` /
@@ -90,7 +91,7 @@ SH
 make_herdr_statefake() {  # <dir> -> echoes fakebin dir; seeds an empty state file
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
-  printf '{"next":1,"workspaces":[],"tabs":[],"agent_status":{}}\n' > "$dir/state.json"
+  printf '{"server_running":true,"next":1,"workspaces":[],"tabs":[],"agent_status":{}}\n' > "$dir/state.json"
   cat > "$fb/herdr" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -117,7 +118,11 @@ done
 
 case "$cmd $sub" in
   "status --json")
-    printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n'
+    running=$(jq_state -r 'if has("server_running") then .server_running else true end')
+    printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":%s}}\n' "$running"
+    ;;
+  "server "*)
+    jq_state '.server_running = true' | save
     ;;
   "workspace list")
     jq_state '{result:{workspaces:.workspaces}}'
@@ -178,6 +183,11 @@ SH
 fake_herdr_set_agent_status() {  # <state-file> <pane_id> <status>
   local state=$1 pane=$2 status=$3 tmp="$1.tmp.$$"
   jq --arg p "$pane" --arg s "$status" '.agent_status[$p] = $s' "$state" > "$tmp" && mv "$tmp" "$state"
+}
+
+fake_herdr_set_server_running() {  # <state-file> <true|false>
+  local state=$1 running=$2 tmp="$1.tmp.$$"
+  jq --argjson running "$running" '.server_running = $running' "$state" > "$tmp" && mv "$tmp" "$state"
 }
 
 # herdr_case <name> -> sets up FM_HERDR_LOG/FM_HERDR_RESPONSES/fb for one test,
@@ -297,27 +307,18 @@ test_cli_helper_sets_env_and_appends_trailing_session_flag() {
 # --- container_ensure / create_task ------------------------------------------
 
 test_container_ensure_starts_server_and_workspace() {
-  local dir log resp fb out
-  dir="$TMP_ROOT/container"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  # 1: version_check status --json (server not running yet, irrelevant to client check)
-  printf '{"client":{"version":"0.7.1","protocol":14}}\n' > "$resp/1.out"
-  # 2: server_ensure's status --json check -> not running
-  printf '{"server":{"running":false}}\n' > "$resp/2.out"
-  # 3: `herdr server` backgrounded launch - no meaningful output
-  # 4: server_ensure poll -> now running
-  printf '{"server":{"running":true}}\n' > "$resp/4.out"
-  # 5: workspace list -> empty (no "firstmate" workspace yet)
-  printf '{"result":{"workspaces":[]}}\n' > "$resp/5.out"
-  # 6: workspace create -> w1, seeding default tab w1:t9 (real herdr returns
-  # the seeded tab/pane ids in the SAME response - verified empirically).
-  printf '{"result":{"workspace":{"workspace_id":"w1","label":"firstmate"},"tab":{"tab_id":"w1:t9"},"root_pane":{"pane_id":"w1:p9"}}}\n' > "$resp/6.out"
-  fb=$(make_herdr_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 HERDR_SESSION=fmtest \
+  local dir log state fb out
+  dir="$TMP_ROOT/container"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
+  fb=$(make_herdr_statefake "$dir")
+  fake_herdr_set_server_running "$state" false
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" HERDR_SESSION=fmtest \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /tmp' "$ROOT" )
-  [ "$out" = $'fmtest:w1\tw1:t9' ] || fail "container_ensure should echo '<session>:<workspace_id>\\t<seeded_default_tab_id>', got '$out'"
+  [ "$out" = $'fmtest:w1\tw1:t2' ] || fail "container_ensure should echo '<session>:<workspace_id>\\t<seeded_default_tab_id>', got '$out'"
   assert_contains "$(cat "$log")" "HERDR_SESSION=fmtest"$'\x1f''server' "container_ensure did not start the herdr server"
   assert_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''create'$'\x1f''--cwd'$'\x1f''/tmp'$'\x1f''--label'$'\x1f''firstmate' \
     "container_ensure did not create the firstmate workspace with the given cwd"
+  [ "$(jq -r '.server_running' "$state")" = true ] || fail "container_ensure did not leave the fake server running"
+  [ "$(jq -r '.workspaces | length' "$state")" = 1 ] || fail "container_ensure did not create exactly one workspace: $(jq -c '.workspaces' "$state")"
   pass "fm_backend_herdr_container_ensure: version-gates, starts the server, ensures the firstmate workspace, echoes session:workspace_id + the seeded default tab id"
 }
 
@@ -816,6 +817,20 @@ test_send_key_normalizes_and_targets_pane() {
   expect_code 0 $? "send_key should succeed"
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''escape' "send_key did not normalize Escape to escape"
   pass "fm_backend_herdr_send_key: normalizes the key and targets the right pane"
+}
+
+test_windows_send_key_uses_leading_session_selector() {
+  local dir log resp fb
+  dir="$TMP_ROOT/sendkey-leading-session"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_key default:w1:p2 Escape' "$ROOT"
+  expect_code 0 $? "Windows send_key should succeed"
+  assert_contains "$(cat "$log")" "HERDR_SESSION=default"$'\x1f''--session'$'\x1f''default'$'\x1f''pane'$'\x1f''send-keys' \
+    "Windows send_key must pass --session before variadic send-keys arguments"
+  assert_not_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''escape'$'\x1f''--session' \
+    "Windows send_key must not append --session after send-keys, where herdr treats it as another key"
+  pass "fm_backend_herdr_send_key: Windows uses a leading session selector for variadic send-keys"
 }
 
 test_kill_is_best_effort() {
@@ -1515,6 +1530,39 @@ SH
   pass "fm-peek/fm-send: explicit stale targets matching metadata use the recorded backend"
 }
 
+test_fm_peek_explicit_herdr_target_does_not_require_task_meta() {
+  local dir state log resp fb neutral bare explicit
+  dir="$TMP_ROOT/script-explicit-herdr-no-meta"; state="$dir/state"; mkdir -p "$state" "$dir/responses"
+  log="$dir/log"; resp="$dir/responses"; : > "$log"
+  neutral="$dir/neutral-root"; mkdir -p "$neutral"
+  fm_write_meta "$state/repro.meta" "window=fm-e2e:wB:p1" "backend=herdr"
+  touch "$state/.last-watcher-beat"
+  printf 'captured explicit herdr pane\n' > "$resp/1.out"
+  printf 'captured explicit herdr pane\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  cat > "$fb/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf 'tmux should not be used for an active herdr explicit target\n' >&2
+exit 42
+SH
+  chmod +x "$fb/tmux"
+
+  bare=$( PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$neutral" FM_STATE_OVERRIDE="$state" \
+    FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND=herdr \
+    "$ROOT/bin/fm-peek.sh" fm-repro 5 2>/dev/null )
+  [ "$bare" = "captured explicit herdr pane" ] || fail "bare fm-<id> herdr peek did not capture the pane, got '$bare'"
+
+  explicit=$( PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$neutral" FM_STATE_OVERRIDE="$state" \
+    FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND=herdr \
+    "$ROOT/bin/fm-peek.sh" fm-e2e:wB:p1 5 2>/dev/null )
+  [ "$explicit" = "$bare" ] || fail "explicit herdr target should capture the same pane content as the bare meta-routed selector"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''read'$'\x1f''wB:p1' \
+    "fm-peek did not read the explicit herdr pane id"
+
+  pass "fm-peek: active herdr explicit fm-*:*:* targets capture without requiring task metadata for the raw selector"
+}
+
 # --- workspace lifecycle: reuse, no orphans, default-tab pruning -------------
 
 test_workspace_ensure_prunes_default_tab() {
@@ -2091,6 +2139,7 @@ test_capture_works_around_small_lines_bug
 test_capture_strips_windows_crlf
 test_capture_preserves_pane_read_failure
 test_send_key_normalizes_and_targets_pane
+test_windows_send_key_uses_leading_session_selector
 test_kill_is_best_effort
 test_current_path_reads_cwd
 test_busy_state_working_maps_to_busy
@@ -2134,6 +2183,7 @@ test_dispatch_routes_herdr_backend
 test_dispatch_busy_state_unknown_for_tmux
 test_dispatch_composer_state_routes_by_backend
 test_scripts_route_explicit_target_through_meta_backend
+test_fm_peek_explicit_herdr_target_does_not_require_task_meta
 test_normalize_event_leaves_from_empty
 test_escalation_marker_keys_like_watcher
 test_apply_transition_blocked_requires_commit_to_dedupe

@@ -25,7 +25,7 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-home-seed.sh`        | Transactionally provision a secondmate home and maintain `data/secondmates.md`       |
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend |
 | `fm-dispatch-select.sh`  | Resolve a matched crew-dispatch rule to one concrete profile, owning `quota-balanced` selection |
-| `fm-backend.sh`          | Runtime-backend selection, meta helpers, selector resolution, and operation dispatch |
+| `fm-backend.sh`          | Runtime-backend selection, meta helpers, selector resolution, active-herdr gating for unrecorded three-field explicit targets, and operation dispatch |
 | `fm-backend-hometag-lib.sh` | Shared per-installation home-tag derivation for zellij tab and cmux workspace titles |
 | `fm-composer-lib.sh`     | Single fleet-wide owner of composer-content classification for all backends          |
 | `backends/tmux.sh`       | Verified tmux session-provider adapter                                               |
@@ -56,7 +56,7 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-classify-lib.sh`     | Shared captain-relevant and declared-external-wait wake classification vocabulary    |
 | `fm-send.sh`             | Send one verified literal line or supported key through the target's recorded backend |
 | `fm-tmux-lib.sh`         | Shared tmux pane primitives for busy detection, composer capture, and verified submit |
-| `fm-peek.sh`             | Print a bounded tail of a crewmate endpoint                                          |
+| `fm-peek.sh`             | Print a bounded tail of a crewmate endpoint, with unrecorded herdr-shaped explicit targets routed to herdr only when herdr is active |
 | `fm-pr-check.sh`         | Record `pr=` and `pr_head=` for a PR-ready task, then arm the watcher's merge poll   |
 | `fm-pr-merge.sh`         | Record PR metadata, then merge a task's PR from its full GitHub URL                  |
 | `fm-promote.sh`          | Promote a scout task in place to a protected ship task                               |

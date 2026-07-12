@@ -118,17 +118,29 @@ fm_backend_herdr_workspace_label() {
 # once ANY other herdr server is already bound on the machine - queries
 # silently fall back to whatever server IS running (the wrong one) instead of
 # routing to the requested session or refusing. The `--session <name>` global
-# flag (verified in both leading and trailing position; trailing used here to
-# keep every call site a minimal, append-only diff) always routes correctly,
-# including starting a genuinely separate, isolated server process. The env
-# var is kept alongside it - harmless, self-documenting, and forward-
-# compatible if a future herdr build honors it. Never used by
-# fm_backend_herdr_version_check, which is intentionally session-independent
-# (reads only .client.* fields).
+# flag always routes correctly for non-variadic subcommands, including starting
+# a genuinely separate, isolated server process. Trailing is the common helper
+# shape because it keeps most call sites a minimal, append-only diff; variadic
+# positional-tail subcommands such as `pane send-keys` must use
+# fm_backend_herdr_cli_leading_session instead. The env var is kept alongside
+# it - harmless, self-documenting, and forward-compatible if a future herdr
+# build honors it. Never used by fm_backend_herdr_version_check, which is
+# intentionally session-independent (reads only .client.* fields).
 fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
   local session=$1
   shift
   HERDR_SESSION="$session" herdr "$@" --session "$session"
+}
+
+# fm_backend_herdr_cli_leading_session: run `herdr --session <session> ...`
+# for subcommands whose positional tail is variadic.
+# `pane send-keys <pane> <key> [key ...]` consumes a trailing `--session` as
+# another key token, so the send-key path must put the global session selector
+# before the subcommand while still setting HERDR_SESSION for symmetry.
+fm_backend_herdr_cli_leading_session() {  # <session> <herdr-subcommand-and-args...>
+  local session=$1
+  shift
+  HERDR_SESSION="$session" herdr --session "$session" "$@"
 }
 
 fm_backend_herdr_cwd_arg() {  # <posix-cwd>
@@ -797,7 +809,7 @@ fm_backend_herdr_send_key() {  # <target> <key>
   local key
   key=$(fm_backend_herdr_normalize_key "$2")
   if fm_platform_is_windows; then
-    MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" "$key" >/dev/null 2>&1
+    MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' fm_backend_herdr_cli_leading_session "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" "$key" >/dev/null 2>&1
   else
     fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" "$key" >/dev/null 2>&1
   fi

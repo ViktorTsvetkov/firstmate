@@ -162,9 +162,10 @@ A workspace whose label this adapter did not derive (see "Label derivation" abov
 
 A herdr task's `window=` meta field holds `<herdr-session>:<pane-id>`, for example `default:w1:p2`.
 The pane id itself contains a colon, so the adapter splits on the FIRST colon only, never on every colon.
-This mirrors tmux's `session:window` target shape closely enough that `fm_backend_resolve_selector` (in `bin/fm-backend.sh`) needed no backend-specific logic at all - it already just returns a task's recorded `window=` value verbatim.
+This mirrors tmux's `session:window` target shape closely enough that normal task-id resolution still returns a task's recorded `window=` value verbatim.
 Task-selector resolution is the shared contract owned by [`docs/configuration.md`](configuration.md) ("Runtime backend").
-For a bare unknown non-`fm-` name, Herdr retains the legacy tmux live-window fallback.
+For `fm-peek.sh`, an unrecorded three-field explicit target such as `<herdr-session>:<workspace>:<pane>` infers herdr only when herdr is active through `FM_BACKEND=herdr`, `config/backend`, or runtime auto-detection.
+Plain POSIX unmatched explicit targets retain the legacy tmux compatibility path.
 
 Herdr tasks additionally record:
 
@@ -182,7 +183,7 @@ Herdr tasks additionally record:
 | Duplicate task check | `herdr tab list --workspace <id>`, match by `.label` | Herdr does NOT enforce tab-label uniqueness itself; two tabs can share a label. The adapter's own duplicate check is required. |
 | Send literal (unsubmitted) | `herdr pane send-text <pane> <text>` | Does NOT auto-submit, contrary to the original design addendum's guess. Verified directly: a unique marker sent this way sits unexecuted in the composer until a separate Enter. Behaves exactly like tmux's `send-keys -l`. |
 | Send + submit atomically | `herdr pane run <pane> <command>` | Runs and submits a command in one call; used for the two fixed spawn-time commands (`treehouse get`, the `GOTMPDIR` export) exactly where tmux used one `send-keys ... Enter` call. |
-| Send key | `herdr pane send-keys <pane> <key>` | Verified names: `enter`, `escape` (alias `esc`), `ctrl+c` (aliases `C-c`, `c-c`). `ctrl+c` verified to interrupt a running foreground process immediately. |
+| Send key | `herdr pane send-keys <pane> <key>` on POSIX; `herdr --session <session> pane send-keys <pane> <key>` on native Windows | Verified names: `enter`, `escape` (alias `esc`), `ctrl+c` (aliases `C-c`, `c-c`). `ctrl+c` verified to interrupt a running foreground process immediately. The native-Windows path puts `--session` before `pane send-keys` because `send-keys` has a variadic key tail and a trailing `--session` can be consumed as another key token. |
 | Submit confirmation (idle baseline) | `herdr agent get <pane>` -> `.result.agent.agent_status` after Enter | `fm_backend_herdr_send_text_submit` records the pre-Enter status and, when it is idle/done, confirms delivery by polling for `working`/`blocked` across the Enter attempt's confirmation budget. Composer-state reads remain the affirmative-empty pre-injection guard and the conservative fallback for preexisting submit-active or unreadable baselines; see "Native agent-state submit confirmation". |
 | Bounded capture | `herdr pane read <pane> --source recent --lines N` | See "Verified bug" below - N is never passed through directly. |
 | ANSI capture | `herdr pane read <pane> --source recent --lines N --format ansi` | Herdr 0.7.3 preserves composer de-emphasis styling, letting the shared `fm_composer_strip_ghost` extractor treat dim/faint and dark-TRUECOLOR ghost/placeholder text as empty while retaining real typed input. The same small-`--lines` workaround applies. |
@@ -268,7 +269,9 @@ All implemented backends expose the identical caller-facing verdict vocabulary (
 
 ## Session targeting: the `--session` flag, not `HERDR_SESSION` alone
 
-`HERDR_SESSION=<name>` is the adapter's normal way to select a named herdr session for NON-destructive operations: start, workspace, tab, pane, capture, send, and busy-state calls all still use it (via `fm_backend_herdr_cli`, below).
+`HERDR_SESSION=<name>` is still set for the adapter's NON-destructive operations: start, workspace, tab, pane, capture, send, and busy-state calls.
+Most calls use `fm_backend_herdr_cli`, which appends trailing `--session`.
+Native-Windows `pane send-keys` uses `fm_backend_herdr_cli_leading_session` because the positional key tail is variadic.
 
 Destructive session cleanup is different, and this distinction was learned the hard way.
 Verified empirically: on the installed herdr 0.7.1 client, neither an exported `HERDR_SESSION` nor an inline `HERDR_SESSION="$name"` prefix reliably targets a CLI subcommand once ANOTHER herdr server (e.g. the captain's live default session) is already bound on the machine - the client silently falls back to whatever server IS running instead of the requested one.
@@ -278,7 +281,8 @@ This is not a hypothetical: it killed the captain's live default herdr server, t
 The fix, verified against the real binary in an isolated session (both a genuinely separate isolated session and the default session's untouched state confirmed before and after):
 
 - The `--session <name>` GLOBAL FLAG reliably routes every herdr subcommand tried (`status`, `workspace *`, `tab *`, `pane *`, `agent *`, `server`, `session stop`/`delete`) to the named session, in either leading (`herdr --session <name> <subcommand>`) or trailing (`herdr <subcommand> ... --session <name>`) position - both verified to work identically.
-- `bin/backends/herdr.sh`'s `fm_backend_herdr_cli` helper wraps every herdr invocation in the adapter: it sets `HERDR_SESSION` (kept for cosmetic/forward-compat reasons - harmless, and it is what the client's own JSON echoes back) AND appends a trailing `--session <name>`, so every adapter call is correctly scoped regardless of what else is running on the machine.
+- `bin/backends/herdr.sh`'s `fm_backend_herdr_cli` helper wraps most herdr invocations in the adapter: it sets `HERDR_SESSION` (kept for cosmetic/forward-compat reasons - harmless, and it is what the client's own JSON echoes back) AND appends a trailing `--session <name>`, so those adapter calls are correctly scoped regardless of what else is running on the machine.
+- `fm_backend_herdr_cli_leading_session` is the native-Windows exception for `pane send-keys`, whose variadic key tail can consume a trailing `--session` as another key token; it still sets `HERDR_SESSION`, but places `--session <name>` before the subcommand.
 - For destructive session cleanup specifically, use `herdr session stop <name>` / `herdr session delete <name>` (the explicit-by-name forms - `<name>` is a REQUIRED positional argument, so herdr cannot resolve it ambiguously; herdr's own help text requires literally typing `default` to affect the default session), never the ambient `herdr server stop`. `bin/fm-herdr-lab.sh` now owns this guard as the single source of truth: `fm_herdr_lab_teardown` does the stop-then-delete, gated by a read-only hard guard (`fm_herdr_lab_refuse_if_default`, re-querying `herdr session list --json` immediately before EVERY stop/delete call, refusing on a literal `default` name, a not-found name, or `default:true`) as a second, independent layer that fails closed on any ambiguity. `tests/herdr-test-safety.sh` now sources that helper, so its `herdr_safe_stop_and_delete`/`herdr_refuse_if_default` names are thin delegating wrappers over the same owner.
 
 The same guard is now a first-class production helper, `bin/fm-herdr-lab.sh`, not just test scaffolding.
@@ -369,8 +373,15 @@ The fix is transport-layer only - discovery, injection, and the busy/composer gu
 Classification policy, batching, the max-defer escape, the `FM_INJECT_MARK` sentinel contract, locks, and wake-queue handling are all unchanged.
 
 **Discovery.** `FM_SUPERVISOR_TARGET` remains the explicit override, now accepting either a tmux target or a herdr `"<session>:<pane-id>"` target.
-A new `FM_SUPERVISOR_BACKEND` override (`tmux`|`herdr`) resolves independently, mirroring `bin/fm-backend.sh`'s own `fm_backend_detect`: `$TMUX_PANE` set selects tmux (even nested inside herdr, matching the innermost-first rule); `$HERDR_ENV=1` with `$HERDR_PANE_ID` present selects herdr, composing the target as `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"`; absent both, the daemon falls back to tmux/`firstmate:0`, byte-identical to its pre-herdr-support behavior.
+A new `FM_SUPERVISOR_BACKEND` override (`tmux`|`herdr`) resolves independently, mirroring `bin/fm-backend.sh`'s own `fm_backend_detect`: `$TMUX_PANE` set selects tmux (even nested inside herdr, matching the innermost-first rule); `$HERDR_ENV=1` with `$HERDR_PANE_ID` present selects herdr, composing the target as `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"`; absent those env markers on native Windows, a live Herdr owner in the per-home session lock selects the same herdr backend and target; absent all of those, the daemon falls back to tmux/`firstmate:0`, byte-identical to its pre-herdr-support behavior.
+On native Windows with herdr, startup validates an explicit `FM_SUPERVISOR_TARGET` with `fm_backend_target_exists`.
+If the override is stale but the live `$HERDR_PANE_ID` or session-lock fallback resolves, the daemon logs that it ignored the stale override and starts on the live target.
+POSIX and tmux keep the historical explicit-target refusal path.
 Other runtime backends, including zellij, orca, and cmux, are not yet supported as supervisor backends - the daemon refuses loudly at startup (`FM_SUPERVISOR_SUPPORTED_BACKENDS="tmux herdr"`) rather than misapplying tmux primitives to a pane that isn't a tmux pane.
+
+**Afk-clear shutdown.** On native Windows with herdr, the daemon evaluates the `state/.afk` inactive gate on every housekeeping loop tick, not only inside injection.
+That lets a cleared away-mode flag stop the daemon promptly even under wake starvation.
+POSIX and tmux shutdown timing remains unchanged.
 
 **Injection dispatch.** `inject_msg`'s pane-exists probe, busy-guard (`pane_is_busy`), composer-guard (a direct `fm_backend_composer_state` read; see the composer-safety note below), and verified submit all take an optional `<backend>` argument (defaulting to `tmux` when omitted, so every pre-existing caller/test is unaffected) and route through the generic dispatchers instead of calling `tmux` directly.
 For `backend=tmux` every dispatch resolves to the exact same underlying call as before (`fm_backend_capture`'s tmux arm runs the identical `tmux capture-pane -p -t <target> -S -40`; `fm_backend_tmux_send_text_submit` re-exports `fm_tmux_submit_core` verbatim), so tmux behavior is unchanged byte-for-byte.
