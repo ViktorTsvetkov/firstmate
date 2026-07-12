@@ -629,15 +629,20 @@ test_backend_of_selector_gates_herdr_shape_on_active_herdr() {
 
   out=$(unset TMUX CMUX_WORKSPACE_ID FM_BACKEND __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" FM_PLATFORM_IS_WINDOWS=no HERDR_ENV=1 \
     fm_backend_of_selector 'fm-e2e:wC:p2' 'fm-e2e:wC:p2' "$state")
-  [ "$out" = herdr ] \
-    || fail "HERDR_ENV=1 should route an unmatched explicit three-field target to herdr, got '$out'"
+  [ "$out" = tmux ] \
+    || fail "POSIX HERDR_ENV=1 must keep routing an unmatched explicit three-field target to tmux, got '$out'"
 
   out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" FM_PLATFORM_IS_WINDOWS=no FM_BACKEND=herdr \
     fm_backend_of_selector 'fm-e2e:wC:p2' 'fm-e2e:wC:p2' "$state")
-  [ "$out" = herdr ] \
-    || fail "FM_BACKEND=herdr should route an unmatched explicit three-field target to herdr, got '$out'"
+  [ "$out" = tmux ] \
+    || fail "POSIX FM_BACKEND=herdr must keep routing an unmatched explicit three-field target to tmux, got '$out'"
 
-  pass "fm_backend_of_selector: explicit herdr-shaped targets infer herdr only when herdr is active; plain POSIX stays tmux"
+  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" FM_PLATFORM_IS_WINDOWS=yes FM_BACKEND=herdr \
+    fm_backend_of_selector 'fm-e2e:wC:p2' 'fm-e2e:wC:p2' "$state")
+  [ "$out" = herdr ] \
+    || fail "Windows FM_BACKEND=herdr should route an unmatched explicit three-field target to herdr, got '$out'"
+
+  pass "fm_backend_of_selector: explicit herdr-shaped targets infer herdr only when herdr is active on Windows; POSIX stays tmux"
 }
 
 # --- old vs new: fm-send.sh --------------------------------------------------

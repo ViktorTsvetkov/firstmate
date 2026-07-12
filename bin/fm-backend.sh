@@ -408,7 +408,7 @@ fm_backend_of_selector() {  # <raw-target> <resolved-target> <state-dir>
     meta=$(fm_backend_meta_for_window "$resolved" "$state" 2>/dev/null || true)
     [ -n "$meta" ] && { fm_backend_of_meta "$meta"; return 0; }
   fi
-  if fm_backend_herdr_selector_active && [ -n "$resolved" ]; then
+  if fm_platform_is_windows && fm_backend_herdr_selector_active && [ -n "$resolved" ]; then
     case "$resolved" in
       *:*:*) printf 'herdr'; return 0 ;;
     esac
