@@ -116,7 +116,7 @@ fm_platform_ps_field() {  # <pid> <field>
 fm_platform_pid_identity() {  # <pid>
   local pid=$1 out rest starttime cmd stime command
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  out=$(ps -p "$pid" -o lstart= -o command= 2>/dev/null)
+  out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null)
   if [ -n "$out" ]; then
     case "$out" in
       *$'\n'*|PID[[:space:]]*) : ;;

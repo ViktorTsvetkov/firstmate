@@ -64,7 +64,29 @@ test_temp_root_posix_is_tmp() {
   pass "fm-platform-lib temp root stays /tmp on POSIX regardless of TMPDIR"
 }
 
+test_pid_identity_pins_lc_all_for_lstart() {
+  local dir fakebin out
+  dir="$TMP_ROOT/pid-identity-locale"
+  fakebin=$(fm_fakebin "$dir")
+cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"-p 4321 -o lstart= -o command="*)
+    printf '%s /usr/bin/bash\n' "${LC_ALL:-unset}"
+    ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+
+  out=$(PATH="$fakebin:$PATH" LC_ALL=C.utf8 bash -c '. "$1"; fm_platform_pid_identity 4321' _ "$LIB")
+  [ "$out" = "C /usr/bin/bash" ] || fail "pid identity did not pin LC_ALL=C for lstart ps (got '$out')"
+
+  pass "fm-platform-lib pid identity pins LC_ALL for lstart ps"
+}
+
 test_msys_fixed_ps_fields
 test_windows_userprofile_home_fallback
 test_temp_root_windows_honors_tmpdir
 test_temp_root_posix_is_tmp
+test_pid_identity_pins_lc_all_for_lstart
