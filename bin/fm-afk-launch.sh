@@ -594,11 +594,21 @@ fm_afk_launch_stop() {
 }
 
 fm_afk_launch_main() {
-  local result
+  local result signal=
   trap fm_afk_launch_lock_release EXIT
+  trap 'signal=130' INT
+  trap 'signal=143' TERM
+  if ! fm_afk_launch_lock_acquire; then
+    if [ -n "$signal" ]; then
+      exit "$signal"
+    fi
+    return 1
+  fi
+  if [ -n "$signal" ]; then
+    exit "$signal"
+  fi
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  fm_afk_launch_lock_acquire || return 1
   case "${1:-start}" in
     start) fm_afk_launch_start ;;
     start-native) fm_afk_launch_start_native ;;

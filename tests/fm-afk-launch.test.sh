@@ -262,6 +262,30 @@ unit_signal_exits_with_lock_cleanup() {
   rm -rf "$st"
 }
 
+unit_signal_during_lock_publication_cleans_lock() {
+  local st
+  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-signal-publish.XXXXXX")
+  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" bash -c '
+    . "$1"
+    fm_afk_launch_start() { :; }
+    mkdir() {
+      if [ "${1:-}" = "$FM_AFK_LAUNCH_LOCK" ]; then
+        command mkdir "$1" || return 1
+        kill -TERM "$$"
+        return 0
+      fi
+      command mkdir "$@"
+    }
+    fm_afk_launch_main start
+  ' _ "$LAUNCH" >/dev/null 2>&1
+  if [ "$?" -eq 143 ] && [ ! -e "$st/state/.afk-launch.lock" ]; then
+    pass "launcher signal: TERM during lock publication releases the lifecycle lock"
+  else
+    fail "launcher signal: TERM during lock publication retained its lock"
+  fi
+  rm -rf "$st"
+}
+
 unit_herdr_partial_create_recovery() {
   local st recorded
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-herdr-partial.XXXXXX")
@@ -868,6 +892,7 @@ unit_failed_start_rolls_back_state
 unit_concurrent_start_serialized
 unit_lock_initialization_grace
 unit_signal_exits_with_lock_cleanup
+unit_signal_during_lock_publication_cleans_lock
 unit_herdr_partial_create_recovery
 unit_herdr_error_with_exact_ids_closes_exact
 unit_herdr_run_failure_preserves_unconfirmed_record
