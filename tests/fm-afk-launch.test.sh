@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # tests/fm-afk-launch.test.sh - the script-owned, backend-aware away-daemon
-# launch (bin/fm-afk-launch.sh) and the away-mode stale-artifact lifecycle fixes
-# (bin/fm-afk-start.sh). Two layers:
+# launch (bin/fm-afk-launch.sh), launcher-lock signal cleanup, and the away-mode
+# stale-artifact lifecycle fixes (bin/fm-afk-start.sh). Two layers:
 #
 #   UNIT (always run, no backend): the session-scoped stale-artifact clear on a
-#   fresh entry vs a refresh, and the correct-ordered stop (daemon SIGTERM'd
-#   while state/.afk is still present, .afk cleared last).
+#   fresh entry vs a refresh, launcher-lock cleanup when signaled during or after
+#   lock publication, and the correct-ordered stop (daemon SIGTERM'd while
+#   state/.afk is still present, .afk cleared last).
 #
 #   E2E TOPOLOGY (per backend, skipped when its tool is absent): the anti-
 #   regression for the pane split/shrink - entering AND exiting away mode leaves

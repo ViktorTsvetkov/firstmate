@@ -39,6 +39,11 @@
 # Supported backends: herdr, tmux. Others (zellij, orca, cmux) have no verified
 # non-visible-launch primitive here yet and refuse loudly.
 #
+# Lifecycle lock signal safety: this script arms EXIT/INT/TERM traps before it
+# attempts state/.afk-launch.lock acquisition, so a signal during lock-directory
+# publication exits with the signal status and still releases any lock owned by
+# this process.
+#
 # Test seam: FM_AFK_LAUNCH_ENTRY overrides the command run in the created
 # terminal (default bin/fm-afk-start.sh), so a topology test can run a harmless
 # placeholder instead of a real daemon. FM_SUPERVISOR_TARGET/FM_SUPERVISOR_BACKEND

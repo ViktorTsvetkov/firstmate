@@ -725,6 +725,13 @@ On entry the launcher drops the prior session's artifacts when the daemon is not
 This never drops a genuinely-pending escalation: the durable record is `state/.wake-queue` plus each crew's `state/<id>.status`, and any still-true condition is re-escalated by the daemon's heartbeat catch-all scan.
 Covered by the unit cases in `tests/fm-afk-launch.test.sh` (clear-on-fresh-entry vs refresh, and the stop ordering asserting the daemon saw `state/.afk` present at SIGTERM).
 
+### Launcher-lock signal race fix (2026-07-13)
+
+`bin/fm-afk-launch.sh` serializes away-mode lifecycle entry and exit with `state/.afk-launch.lock`.
+The launcher now arms its EXIT/INT/TERM traps before attempting that lock acquisition, so an INT or TERM delivered while the lock directory is being published exits with the signal status and still runs the pid-guarded lock release path.
+This prevents an orphaned lifecycle lock without changing backend behavior.
+Covered by `tests/fm-afk-launch.test.sh`'s signal cases, including a TERM injected immediately after lock-directory creation.
+
 ## Known gaps and follow-up notes
 
 - **Backend-specific bootstrap detection is absent.** `bin/fm-bootstrap.sh` still requires `tmux` outside Orca mode, and does not yet conditionally add `herdr` and `jq` when a backend selection resolves to herdr.
