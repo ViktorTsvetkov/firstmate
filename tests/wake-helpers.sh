@@ -270,7 +270,7 @@ esac
 wait_for_exit() {
   local pid=$1 limit=$(( ${2:-50} * FM_TEST_WAIT_SCALE )) i=0
   while [ "$i" -lt "$limit" ]; do
-    if ! kill -0 "$pid" 2>/dev/null; then
+    if ! is_live_non_zombie "$pid"; then
       wait "$pid"
       return "$?"
     fi

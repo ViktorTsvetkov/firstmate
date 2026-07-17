@@ -24,12 +24,13 @@
 # catch-up or when afk is re-entered.
 #
 # IN-BAND SENTINEL MARKER. Every daemon injection is prefixed with
-# FM_INJECT_MARK (ASCII unit separator, 0x1f) — a byte a human would never type
-# at the start of a message. Firstmate's contract: a message that starts with
-# the marker is an internal escalation (stay afk); a message without it means
-# the captain is back (exit afk, flush catch-up, resume per-wake responsiveness).
-# The marker and the busy-guard solve the same problem — the daemon and the
-# human share one input channel — so they live together under /afk.
+# FM_INJECT_MARK (U+2063 INVISIBLE SEPARATOR), a character a human cannot type
+# from a normal keyboard at the start of a message and Herdr transports as text.
+# Firstmate's contract: a message that starts with the marker is an internal
+# escalation (stay afk); a message without it means the captain is back (exit
+# afk, flush catch-up, resume per-wake responsiveness). The marker and the
+# busy-guard solve the same problem - the daemon and the human share one input
+# channel - so they live together under /afk.
 #
 # Reliability model (see the /afk skill):
 #   - Nothing is lost in away mode: while state/.afk exists, the watcher reverts
@@ -208,13 +209,15 @@ LOG_MAX_BYTES_DEFAULT=1048576
 LOG_KEEP_LINES_DEFAULT=2000
 
 # --- presence-gating + sentinel marker --------------------------------------
-# The in-band sentinel: ASCII unit separator (0x1f). Invisible and untypable on
-# a normal keyboard, so no real user message starts with it. Every daemon
-# injection is prefixed with this byte; firstmate treats a leading marker as an
-# internal escalation (stay afk) and its absence as "captain is back" (exit afk).
-# Portable across harnesses: it travels with the message text, independent of
-# any harness-level typed-vs-injected distinction.
-FM_INJECT_MARK=$'\x1f'
+# The in-band sentinel: U+2063 INVISIBLE SEPARATOR (UTF-8 e2 81 a3). It has no
+# normal keyboard keystroke, so no real user message starts with it. Unlike the
+# original ASCII unit separator, Herdr transports U+2063 through Pi's terminal
+# editor as text instead of consuming it as a control action. Every daemon
+# injection is prefixed with this character; firstmate treats a leading marker
+# as an internal escalation (stay afk) and its absence as "captain is back"
+# (exit afk). Portable across harnesses: it travels with the message text,
+# independent of any harness-level typed-vs-injected distinction.
+FM_INJECT_MARK=$'\xE2\x81\xA3'
 AFK_FLAG_NAME=".afk"
 
 # Resolve the effective state dir. FM_STATE_OVERRIDE wins (testing); otherwise
@@ -306,179 +309,10 @@ _collapse_newlines() {  # <text>
   printf '%s' "$s"
 }
 
-source_fm_lock_lib() {
-  declare -F holder_alive >/dev/null 2>&1 && return 0
-  local old=${FM_LOCK_LIB_ONLY-} had_old=0
-  local old_state=${STATE-} had_state=0
-  local old_lock=${LOCK-} had_lock=0
-  [ "${FM_LOCK_LIB_ONLY+x}" = x ] && had_old=1
-  [ "${STATE+x}" = x ] && had_state=1
-  [ "${LOCK+x}" = x ] && had_lock=1
-  FM_LOCK_LIB_ONLY=1
-  # shellcheck source=bin/fm-lock.sh
-  . "$FM_DAEMON_DIR/fm-lock.sh"
-  if [ "$had_old" -eq 1 ]; then
-    FM_LOCK_LIB_ONLY=$old
-  else
-    unset FM_LOCK_LIB_ONLY
-  fi
-  if [ "$had_state" -eq 1 ]; then
-    STATE=$old_state
-  else
-    unset STATE
-  fi
-  if [ "$had_lock" -eq 1 ]; then
-    LOCK=$old_lock
-  else
-    unset LOCK
-  fi
-}
-
-herdr_session_lock_owner_alive() {
-  source_fm_lock_lib || return 1
-  holder_alive "$1"
-}
-
-discover_herdr_session_lock_target() {
-  local lock owner rest session pane terminal
-  fm_platform_is_windows || return 1
-  lock="$(_state_root)/.lock"
-  [ -f "$lock" ] || return 1
-  owner=$(cat "$lock" 2>/dev/null || true)
-  case "$owner" in
-    herdr:*:*:*) ;;
-    *) return 1 ;;
-  esac
-  rest=${owner#herdr:}
-  session=${rest%%:*}
-  rest=${rest#*:}
-  terminal=${rest##*:}
-  pane=${rest%:*}
-  [ -n "$session" ] && [ -n "$pane" ] && [ -n "$terminal" ] || return 1
-  herdr_session_lock_owner_alive "$owner" || return 1
-  printf '%s:%s' "$session" "$pane"
-}
-
-# Auto-discover the supervisor pane at startup. Priority:
-#   1. FM_SUPERVISOR_TARGET env (explicit override) — caller passes it in;
-#      may be a tmux target or a herdr "<session>:<pane-id>" target (paired
-#      with discover_supervisor_backend, below, to know which).
-#   2. $TMUX_PANE — tmux sets this in every pane's environment; inherited by
-#      the daemon when the /afk skill launches it from firstmate's own pane.
-#   3. $HERDR_ENV=1 + $HERDR_PANE_ID — herdr injects both into every process
-#      it manages a pane for (docs/herdr-backend.md); the daemon composes the
-#      "<session>:<pane-id>" target string the herdr adapter expects from
-#      $HERDR_SESSION (defaulting to "default", mirroring
-#      bin/backends/herdr.sh's fm_backend_herdr_session) and $HERDR_PANE_ID.
-#      Checked after $TMUX_PANE so a tmux pane nested inside herdr still
-#      resolves to tmux, matching fm_backend_detect's innermost-first rule.
-#   4. firstmate:0 — legacy tmux fallback (may not resolve if the session is
-#      named differently). The caller logs a warning in that case.
-# Returns the resolved target on stdout; returns 1 if only the fallback is left
-# AND the fallback does not resolve to a live pane.
-discover_supervisor_target() {
-  local herdr_target
-  if [ -n "${FM_SUPERVISOR_TARGET:-}" ]; then
-    printf '%s' "$FM_SUPERVISOR_TARGET"
-    return 0
-  fi
-  if [ -n "${TMUX_PANE:-}" ]; then
-    printf '%s' "$TMUX_PANE"
-    return 0
-  fi
-  if [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
-    printf '%s:%s' "${HERDR_SESSION:-default}" "$HERDR_PANE_ID"
-    return 0
-  fi
-  if herdr_target=$(discover_herdr_session_lock_target); then
-    printf '%s' "$herdr_target"
-    return 0
-  fi
-  printf '%s' "$FM_SUPERVISOR_TARGET_DEFAULT"
-  return 1
-}
-
-supervisor_target_source() {
-  local mode=${1:-with-override}
-  if [ "$mode" != "without-override" ] && [ -n "${FM_SUPERVISOR_TARGET:-}" ]; then
-    printf 'FM_SUPERVISOR_TARGET'
-  elif [ -n "${TMUX_PANE:-}" ]; then
-    printf 'TMUX_PANE'
-  elif [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
-    printf 'HERDR_ENV(HERDR_PANE_ID)'
-  elif discover_herdr_session_lock_target >/dev/null 2>&1; then
-    printf 'SESSION_LOCK'
-  else
-    printf 'FALLBACK(firstmate:0)'
-  fi
-}
-
-resolve_supervisor_target_for_startup() {
-  local backend=$1 discovered target_source explicit_target fallback fallback_source
-  explicit_target=${FM_SUPERVISOR_TARGET:-}
-  target_source=$(supervisor_target_source)
-  if discovered=$(discover_supervisor_target); then
-    : # resolved cleanly
-  else
-    if fm_platform_is_windows && [ "$backend" = herdr ]; then
-      echo "warn: could not auto-discover supervisor pane (no FM_SUPERVISOR_TARGET, TMUX_PANE, HERDR_ENV/HERDR_PANE_ID, or herdr session-lock pane); falling back to '$discovered' - verify this is firstmate's pane" >&2
-    else
-      echo "warn: could not auto-discover supervisor pane (no FM_SUPERVISOR_TARGET, TMUX_PANE, or HERDR_ENV/HERDR_PANE_ID); falling back to '$discovered' — verify this is firstmate's pane" >&2
-    fi
-  fi
-  if fm_backend_target_exists "$backend" "$discovered"; then
-    printf '%s\t%s' "$discovered" "$target_source"
-    return 0
-  fi
-  if [ -n "$explicit_target" ] && fm_platform_is_windows && [ "$backend" = herdr ]; then
-    fallback_source=$(supervisor_target_source without-override)
-    if fallback=$(FM_SUPERVISOR_TARGET='' discover_supervisor_target) \
-       && fm_backend_target_exists "$backend" "$fallback"; then
-      log "startup: ignoring stale FM_SUPERVISOR_TARGET '$explicit_target'; using $fallback_source target '$fallback'"
-      printf '%s\t%s' "$fallback" "$fallback_source(stale FM_SUPERVISOR_TARGET ignored)"
-      return 0
-    fi
-  fi
-  printf '%s\t%s' "$discovered" "$target_source"
-  return 1
-}
-
-should_shutdown_on_afk_inactive_tick() {
-  local backend=$1 state=$2
-  fm_platform_is_windows || return 1
-  [ "$backend" = herdr ] || return 1
-  ! afk_active "$state"
-}
-
-# Auto-discover the supervisor's BACKEND at startup - independent of the
-# target string above, so an explicit FM_SUPERVISOR_TARGET override still
-# needs to know which primitives (tmux vs herdr) to dispatch through. Priority
-# mirrors discover_supervisor_target and bin/fm-backend.sh's fm_backend_detect:
-#   1. FM_SUPERVISOR_BACKEND env (explicit override).
-#   2. $TMUX_PANE set — tmux.
-#   3. $HERDR_ENV=1 (with $HERDR_PANE_ID present) — herdr.
-#   4. FM_SUPERVISOR_BACKEND_DEFAULT (tmux) — matches the target fallback above.
-# Returns the resolved backend on stdout; returns 1 if only the fallback is left.
-discover_supervisor_backend() {
-  if [ -n "${FM_SUPERVISOR_BACKEND:-}" ]; then
-    printf '%s' "$FM_SUPERVISOR_BACKEND"
-    return 0
-  fi
-  if [ -n "${TMUX_PANE:-}" ]; then
-    printf 'tmux'
-    return 0
-  fi
-  if [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
-    printf 'herdr'
-    return 0
-  fi
-  if discover_herdr_session_lock_target >/dev/null 2>&1; then
-    printf 'herdr'
-    return 0
-  fi
-  printf '%s' "$FM_SUPERVISOR_BACKEND_DEFAULT"
-  return 1
-}
+# discover_supervisor_target / discover_supervisor_backend are owned by
+# bin/fm-supervisor-target-lib.sh (sourced above). fm_super_main below calls
+# them exactly as before; the away launcher reuses the identical resolution to
+# pass the captain pane in as FM_SUPERVISOR_TARGET.
 
 # --- classification helpers (PURE: no side effects, testable) ---------------
 # last_status_line, status_is_captain_relevant, window_to_task, and
