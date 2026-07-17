@@ -21,7 +21,7 @@ case "$*" in
   *" -o "*) exit 1 ;;
   *"-p 4321"*)
     printf '      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND\n'
-    printf '     4321    1234    4321      98765  pty0      197609 12:34:56 /usr/bin/bash\n'
+    printf 'S    4321    1234    4321      98765  pty0      197609 Jan 29 /usr/bin/bash --login\n'
     ;;
   *) exit 1 ;;
 esac
@@ -32,12 +32,16 @@ SH
   [ "$out" = 1234 ] || fail "fixed-column ps ppid parse returned '$out'"
 
   out=$(PATH="$fakebin:$PATH" bash -c '. "$1"; fm_platform_ps_field 4321 comm' _ "$LIB")
-  [ "$out" = /usr/bin/bash ] || fail "fixed-column ps command parse returned '$out'"
+  [ "$out" = "/usr/bin/bash --login" ] || fail "fixed-column ps command parse returned '$out'"
 
-  out=$(PATH="$fakebin:$PATH" bash -c '. "$1"; fm_platform_pid_identity 4321' _ "$LIB")
-  [ "$out" = "12:34:56 /usr/bin/bash" ] || fail "fixed-column ps identity returned '$out'"
+  out=$(PATH="$fakebin:$PATH" bash -c '. "$1"; fm_platform_ps_fixed_field 4321 stime' _ "$LIB")
+  [ "$out" = "Jan 29" ] || fail "fixed-column ps start time parse returned '$out'"
 
-  pass "fm-platform-lib parses MSYS fixed-column ps output for ppid, command, and identity"
+  if PATH="$fakebin:$PATH" bash -c '. "$1"; fm_platform_pid_identity 4321' _ "$LIB"; then
+    fail "fixed-column ps identity should fail without a stable creation token"
+  fi
+
+  pass "fm-platform-lib parses status-prefixed MSYS ps output and rejects unstable identity"
 }
 
 test_windows_userprofile_home_fallback() {

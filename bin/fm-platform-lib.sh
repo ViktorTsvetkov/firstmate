@@ -67,12 +67,20 @@ fm_platform_home_dir() {
 }
 
 fm_platform_ps_fixed_line() {  # <pid>
-  local pid=$1 line first
+  local pid=$1 line first second
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line#"${line%%[![:space:]]*}"}
     [ -n "$line" ] || continue
     first=${line%%[[:space:]]*}
+    case "$first" in
+      I|S|O)
+        line=${line#"$first"}
+        line=${line#"${line%%[![:space:]]*}"}
+        second=${line%%[[:space:]]*}
+        first=$second
+        ;;
+    esac
     [ "$first" = "$pid" ] || continue
     printf '%s\n' "$line"
     return 0
@@ -85,12 +93,21 @@ EOF
 # Parse MSYS/Cygwin fixed-column ps output:
 # PID PPID PGID WINPID TTY UID STIME COMMAND
 fm_platform_ps_fixed_field() {  # <pid> <field>
-  local pid=$1 field=$2 line pid_f ppid _pgid _winpid _tty _uid stime command
+  local pid=$1 field=$2 line pid_f ppid _pgid _winpid _tty _uid stime command next
   line=$(fm_platform_ps_fixed_line "$pid") || return 1
   read -r pid_f ppid _pgid _winpid _tty _uid stime command <<EOF
 $line
 EOF
   [ "$pid_f" = "$pid" ] || return 1
+  case "$stime" in
+    Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)
+      next=${command%%[[:space:]]*}
+      [ "$next" != "$command" ] || return 1
+      stime="$stime $next"
+      command=${command#"$next"}
+      command=${command#"${command%%[![:space:]]*}"}
+      ;;
+  esac
   case "$field" in
     pid) printf '%s\n' "$pid_f" ;;
     ppid) printf '%s\n' "$ppid" ;;
@@ -120,7 +137,7 @@ fm_platform_ps_field() {  # <pid> <field>
 }
 
 fm_platform_pid_identity() {  # <pid>
-  local pid=$1 out rest starttime cmd stime command
+  local pid=$1 out rest starttime cmd
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null)
   if [ -n "$out" ]; then
@@ -141,8 +158,5 @@ fm_platform_pid_identity() {  # <pid>
       return 0
     fi
   fi
-  stime=$(fm_platform_ps_fixed_field "$pid" stime) || return 1
-  command=$(fm_platform_ps_fixed_field "$pid" command) || return 1
-  [ -n "$command" ] || return 1
-  printf '%s %s\n' "$stime" "$command"
+  return 1
 }
