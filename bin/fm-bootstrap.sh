@@ -580,6 +580,43 @@ no_mistakes_compatible() {
   [ "$patch" -ge "$NO_MISTAKES_MIN_PATCH" ]
 }
 
+# Native Windows has no executable bit: `chmod` may fail outright and a stat
+# mode read-back never matches the requested POSIX mode. X-mode arming there does
+# not need the bit (the shim is invoked through bash, not exec-by-mode), so the
+# fork deliberately tolerates the chmod failure and skips the mode-equality
+# check while still enforcing every other invariant (single hard link, same
+# device, byte content). Off Windows both wrappers reduce to upstream's exact
+# calls, so the POSIX arming path stays byte-identical.
+x_mode_apply_mode() {  # <mode> <path>
+  if fm_platform_is_windows; then
+    chmod "$1" "$2" 2>/dev/null || true
+    return 0
+  fi
+  chmod "$1" "$2"
+}
+
+x_mode_verify_mode() {  # <path> <mode> <device>
+  if fm_platform_is_windows; then
+    fmx_single_link_file_valid "$1" "$3"
+  else
+    fmx_single_link_file_mode_valid "$1" "$2" "$3"
+  fi
+}
+
+# Post-write shim validation. Upstream's fmx_poll_shim_valid enforces the 700
+# mode (exec bit) on the identity check, which native Windows cannot satisfy.
+# There the shim is still trustworthy without the bit, so validate it exactly as
+# upstream does MINUS the mode: same single-hard-link identity and same byte
+# content. Off Windows this reduces to upstream's fmx_poll_shim_valid verbatim.
+x_mode_poll_shim_valid() {  # <file> <home> <root>
+  if fm_platform_is_windows; then
+    fmx_single_link_file_valid "$1" || return 1
+    cmp -s "$1" <(fmx_poll_shim_content "$2" "$3")
+  else
+    fmx_poll_shim_valid "$1" "$2" "$3"
+  fi
+}
+
 x_mode_write_if_changed() {
   local dest=$1 content=$2 mode=$3 parent tmp parent_device current_mode
   parent=${dest%/*}
@@ -603,8 +640,8 @@ x_mode_write_if_changed() {
   fi
   tmp=$(umask 077; mktemp "$parent/.fm-x-mode.XXXXXX" 2>/dev/null) || return 1
   if ! printf '%s\n' "$content" > "$tmp" \
-    || ! chmod "$mode" "$tmp" \
-    || ! fmx_single_link_file_mode_valid "$tmp" "$mode" "$parent_device"; then
+    || ! x_mode_apply_mode "$mode" "$tmp" \
+    || ! x_mode_verify_mode "$tmp" "$mode" "$parent_device"; then
     rm -f -- "$tmp"
     return 1
   fi
@@ -617,7 +654,7 @@ x_mode_write_if_changed() {
     rm -f -- "$tmp"
     return 1
   fi
-  if ! fmx_single_link_file_mode_valid "$dest" "$mode" "$parent_device" \
+  if ! x_mode_verify_mode "$dest" "$mode" "$parent_device" \
     || ! cmp -s "$dest" <(printf '%s\n' "$content"); then
     rm -f -- "$dest"
     return 1
@@ -716,7 +753,7 @@ x_mode_setup() {
 
   shim_body=$(fmx_poll_shim_content "$FM_HOME" "$FM_ROOT")
   x_mode_write_if_changed "$shim" "$shim_body" 700 || { fmx_arm_failed; return 0; }
-  fmx_poll_shim_valid "$shim" "$FM_HOME" "$FM_ROOT" \
+  x_mode_poll_shim_valid "$shim" "$FM_HOME" "$FM_ROOT" \
     || { fmx_arm_failed; return 0; }
 
   cadence_body=$(cat <<'EOF'
