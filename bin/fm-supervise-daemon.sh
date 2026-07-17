@@ -309,10 +309,199 @@ _collapse_newlines() {  # <text>
   printf '%s' "$s"
 }
 
-# discover_supervisor_target / discover_supervisor_backend are owned by
-# bin/fm-supervisor-target-lib.sh (sourced above). fm_super_main below calls
-# them exactly as before; the away launcher reuses the identical resolution to
-# pass the captain pane in as FM_SUPERVISOR_TARGET.
+# The base discover_supervisor_target / discover_supervisor_backend resolution
+# is owned by bin/fm-supervisor-target-lib.sh (sourced above); the away launcher
+# (bin/fm-afk-launch.sh) reuses that identical resolution to pass the captain
+# pane in as FM_SUPERVISOR_TARGET. The daemon additionally needs a native
+# Windows/herdr session-lock fallback, so it OVERRIDES both functions below,
+# after the lib is sourced, layering only the herdr session-lock branch on top.
+# Off Windows those branches are no-ops, so the daemon's POSIX resolution stays
+# byte-identical to the lib's.
+
+# --- fork-only supervisor helpers (Windows/herdr, behind platform seams) -----
+# These layer the native-Windows/herdr supervisor concerns on top of the shared
+# lib resolution above. Each is either internally gated on
+# fm_platform_is_windows (so it is a no-op on Linux/macOS/tmux) or only reached
+# through the gated branches of resolve_supervisor_target_for_startup, keeping
+# the POSIX daemon path byte-identical to upstream.
+source_fm_lock_lib() {
+  declare -F holder_alive >/dev/null 2>&1 && return 0
+  local old=${FM_LOCK_LIB_ONLY-} had_old=0
+  local old_state=${STATE-} had_state=0
+  local old_lock=${LOCK-} had_lock=0
+  [ "${FM_LOCK_LIB_ONLY+x}" = x ] && had_old=1
+  [ "${STATE+x}" = x ] && had_state=1
+  [ "${LOCK+x}" = x ] && had_lock=1
+  FM_LOCK_LIB_ONLY=1
+  # shellcheck source=bin/fm-lock.sh
+  . "$FM_DAEMON_DIR/fm-lock.sh"
+  if [ "$had_old" -eq 1 ]; then
+    FM_LOCK_LIB_ONLY=$old
+  else
+    unset FM_LOCK_LIB_ONLY
+  fi
+  if [ "$had_state" -eq 1 ]; then
+    STATE=$old_state
+  else
+    unset STATE
+  fi
+  if [ "$had_lock" -eq 1 ]; then
+    LOCK=$old_lock
+  else
+    unset LOCK
+  fi
+}
+
+herdr_session_lock_owner_alive() {
+  source_fm_lock_lib || return 1
+  holder_alive "$1"
+}
+
+discover_herdr_session_lock_target() {
+  local lock owner rest session pane terminal
+  fm_platform_is_windows || return 1
+  lock="$(_state_root)/.lock"
+  [ -f "$lock" ] || return 1
+  owner=$(cat "$lock" 2>/dev/null || true)
+  case "$owner" in
+    herdr:*:*:*) ;;
+    *) return 1 ;;
+  esac
+  rest=${owner#herdr:}
+  session=${rest%%:*}
+  rest=${rest#*:}
+  terminal=${rest##*:}
+  pane=${rest%:*}
+  [ -n "$session" ] && [ -n "$pane" ] && [ -n "$terminal" ] || return 1
+  herdr_session_lock_owner_alive "$owner" || return 1
+  printf '%s:%s' "$session" "$pane"
+}
+
+# Daemon-local override of the lib's discover_supervisor_target (sourced above),
+# layering the herdr session-lock branch on top of the shared resolution. The
+# base priority is unchanged; the extra branch is a no-op off Windows (its
+# discover_herdr_session_lock_target probe returns 1), so the POSIX resolution
+# is byte-identical to the lib. Priority:
+#   1. FM_SUPERVISOR_TARGET env (explicit override) — caller passes it in;
+#      may be a tmux target or a herdr "<session>:<pane-id>" target (paired
+#      with discover_supervisor_backend, below, to know which).
+#   2. $TMUX_PANE — tmux sets this in every pane's environment; inherited by
+#      the daemon when the /afk skill launches it from firstmate's own pane.
+#   3. $HERDR_ENV=1 + $HERDR_PANE_ID — herdr injects both into every process
+#      it manages a pane for (docs/herdr-backend.md); the daemon composes the
+#      "<session>:<pane-id>" target string the herdr adapter expects from
+#      $HERDR_SESSION (defaulting to "default", mirroring
+#      bin/backends/herdr.sh's fm_backend_herdr_session) and $HERDR_PANE_ID.
+#      Checked after $TMUX_PANE so a tmux pane nested inside herdr still
+#      resolves to tmux, matching fm_backend_detect's innermost-first rule.
+#   4. firstmate:0 — legacy tmux fallback (may not resolve if the session is
+#      named differently). The caller logs a warning in that case.
+# Returns the resolved target on stdout; returns 1 if only the fallback is left
+# AND the fallback does not resolve to a live pane.
+discover_supervisor_target() {
+  local herdr_target
+  if [ -n "${FM_SUPERVISOR_TARGET:-}" ]; then
+    printf '%s' "$FM_SUPERVISOR_TARGET"
+    return 0
+  fi
+  if [ -n "${TMUX_PANE:-}" ]; then
+    printf '%s' "$TMUX_PANE"
+    return 0
+  fi
+  if [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+    printf '%s:%s' "${HERDR_SESSION:-default}" "$HERDR_PANE_ID"
+    return 0
+  fi
+  if herdr_target=$(discover_herdr_session_lock_target); then
+    printf '%s' "$herdr_target"
+    return 0
+  fi
+  printf '%s' "$FM_SUPERVISOR_TARGET_DEFAULT"
+  return 1
+}
+
+supervisor_target_source() {
+  local mode=${1:-with-override}
+  if [ "$mode" != "without-override" ] && [ -n "${FM_SUPERVISOR_TARGET:-}" ]; then
+    printf 'FM_SUPERVISOR_TARGET'
+  elif [ -n "${TMUX_PANE:-}" ]; then
+    printf 'TMUX_PANE'
+  elif [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+    printf 'HERDR_ENV(HERDR_PANE_ID)'
+  elif discover_herdr_session_lock_target >/dev/null 2>&1; then
+    printf 'SESSION_LOCK'
+  else
+    printf 'FALLBACK(firstmate:0)'
+  fi
+}
+
+resolve_supervisor_target_for_startup() {
+  local backend=$1 discovered target_source explicit_target fallback fallback_source
+  explicit_target=${FM_SUPERVISOR_TARGET:-}
+  target_source=$(supervisor_target_source)
+  if discovered=$(discover_supervisor_target); then
+    : # resolved cleanly
+  else
+    if fm_platform_is_windows && [ "$backend" = herdr ]; then
+      echo "warn: could not auto-discover supervisor pane (no FM_SUPERVISOR_TARGET, TMUX_PANE, HERDR_ENV/HERDR_PANE_ID, or herdr session-lock pane); falling back to '$discovered' - verify this is firstmate's pane" >&2
+    else
+      echo "warn: could not auto-discover supervisor pane (no FM_SUPERVISOR_TARGET, TMUX_PANE, or HERDR_ENV/HERDR_PANE_ID); falling back to '$discovered' — verify this is firstmate's pane" >&2
+    fi
+  fi
+  if fm_backend_target_exists "$backend" "$discovered"; then
+    printf '%s\t%s' "$discovered" "$target_source"
+    return 0
+  fi
+  if [ -n "$explicit_target" ] && fm_platform_is_windows && [ "$backend" = herdr ]; then
+    fallback_source=$(supervisor_target_source without-override)
+    if fallback=$(FM_SUPERVISOR_TARGET='' discover_supervisor_target) \
+       && fm_backend_target_exists "$backend" "$fallback"; then
+      log "startup: ignoring stale FM_SUPERVISOR_TARGET '$explicit_target'; using $fallback_source target '$fallback'"
+      printf '%s\t%s' "$fallback" "$fallback_source(stale FM_SUPERVISOR_TARGET ignored)"
+      return 0
+    fi
+  fi
+  printf '%s\t%s' "$discovered" "$target_source"
+  return 1
+}
+
+should_shutdown_on_afk_inactive_tick() {
+  local backend=$1 state=$2
+  fm_platform_is_windows || return 1
+  [ "$backend" = herdr ] || return 1
+  ! afk_active "$state"
+}
+
+# Daemon-local override of the lib's discover_supervisor_backend (sourced
+# above), adding the herdr session-lock branch. As with the target override,
+# the extra branch is a no-op off Windows, so the POSIX backend resolution is
+# byte-identical to the lib. Priority mirrors discover_supervisor_target and
+# bin/fm-backend.sh's fm_backend_detect:
+#   1. FM_SUPERVISOR_BACKEND env (explicit override).
+#   2. $TMUX_PANE set — tmux.
+#   3. $HERDR_ENV=1 (with $HERDR_PANE_ID present) — herdr.
+#   4. FM_SUPERVISOR_BACKEND_DEFAULT (tmux) — matches the target fallback above.
+# Returns the resolved backend on stdout; returns 1 if only the fallback is left.
+discover_supervisor_backend() {
+  if [ -n "${FM_SUPERVISOR_BACKEND:-}" ]; then
+    printf '%s' "$FM_SUPERVISOR_BACKEND"
+    return 0
+  fi
+  if [ -n "${TMUX_PANE:-}" ]; then
+    printf 'tmux'
+    return 0
+  fi
+  if [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+    printf 'herdr'
+    return 0
+  fi
+  if discover_herdr_session_lock_target >/dev/null 2>&1; then
+    printf 'herdr'
+    return 0
+  fi
+  printf '%s' "$FM_SUPERVISOR_BACKEND_DEFAULT"
+  return 1
+}
 
 # --- classification helpers (PURE: no side effects, testable) ---------------
 # last_status_line, status_is_captain_relevant, window_to_task, and
