@@ -8,29 +8,39 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-test-runner-windows)
 RUNNER="$ROOT/bin/fm-test-runner-windows.sh"
 NO_MISTAKES="$ROOT/.no-mistakes.yaml"
-# shellcheck disable=SC2016 # Literal upstream command; $t/$rc must not expand here.
-POSIX_COMMAND=':; command -v tmux >/dev/null || { echo "tmux is required for e2e tests" >&2; exit 1; }; tmux -V; rc=0; for t in tests/*.test.sh; do echo "== $t =="; bash "$t" || rc=1; done; exit "$rc"'
-# shellcheck disable=SC2016 # Literal batch command; $t/$rc must not expand here.
-BATCH_COMMAND='. ./bin/fm-platform-lib.sh; if fm_platform_is_windows; then ./bin/fm-test-runner-windows.sh; else rc=0; for t in tests/*.test.sh; do echo "== $t =="; bash "$t" || rc=1; done; exit "$rc"; fi'
+CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 
-test_no_mistakes_posix_command_is_literal_upstream_loop() {
-  assert_grep "$POSIX_COMMAND" "$NO_MISTAKES" \
-    "POSIX no-mistakes command drifted from the upstream sequential loop"
-  pass "no-mistakes POSIX command preserves the upstream sequential loop literally"
+# Ownership note. This fork used to dispatch the native-Windows behavior run from
+# a batch/sh polyglot in .no-mistakes.yaml's commands.test, and the two tests that
+# lived here asserted that value literally. Upstream #823 made local no-mistakes
+# Test intent-targeted and removed commands.test outright; its
+# tests/fm-nm-test-contract.test.sh now FAILS on any non-empty commands.test, so
+# the old polyglot and this fork's assertions on it are mutually exclusive with
+# upstream. Upstream owns that contract, so the polyglot is gone and the Windows
+# lane moved to the ci.yml Git Bash job. These two guards keep the original
+# intent - prove the Windows lane is really wired to a real runner - against the
+# new owner instead of the retired one.
+
+test_no_mistakes_does_not_redispatch_the_windows_lane() {
+  grep -Eq '^[[:space:]]+test:' "$NO_MISTAKES" \
+    && fail "commands.test is back in .no-mistakes.yaml; upstream's intent-targeted Test contract (tests/fm-nm-test-contract.test.sh) forbids it, and the Windows lane belongs to ci.yml"
+  grep -Fq 'NMWINBATCH' "$NO_MISTAKES" \
+    && fail ".no-mistakes.yaml still carries the retired native-Windows batch polyglot"
+  pass "no-mistakes leaves Test intent-targeted and does not re-dispatch the Windows lane"
 }
 
-extract_batch_command() {
-  local line cmd
-  line=$(grep -F '"%NMBASH%" -c ' "$NO_MISTAKES" || true)
-  [ -n "$line" ] || fail "native-Windows batch command is missing the Git Bash -c call"
-  cmd=$(printf '%s\n' "$line" | sed -n 's/^[[:space:]]*"%NMBASH%" -c "\(.*\)"$/\1/p')
-  [ -n "$cmd" ] || fail "could not extract native-Windows batch shell command"
-  cmd=${cmd//\\\"/\"}
-  printf '%s\n' "$cmd"
+test_ci_windows_job_runs_the_windows_runner() {
+  assert_present "$CI_WORKFLOW" "ci.yml is missing"
+  grep -Fq 'bin/fm-test-runner-windows.sh' "$CI_WORKFLOW" \
+    || grep -Fq 'tests/fm-test-runner-windows.test.sh' "$CI_WORKFLOW" \
+    || fail "ci.yml no longer references the native-Windows runner or its test"
+  grep -Eq 'runs-on:[[:space:]]*windows-latest' "$CI_WORKFLOW" \
+    || fail "ci.yml lost its native-Windows Git Bash job"
+  pass "ci.yml owns the native-Windows lane and reaches the Windows runner"
 }
 
-test_no_mistakes_batch_command_selects_windows_or_posix_branch() {
-  local dir cmd out status
+test_runner_selects_windows_or_posix_branch_by_platform_seam() {
+  local dir out status
   dir="$TMP_ROOT/branch"
   mkdir -p "$dir/bin" "$dir/tests"
   cp "$ROOT/bin/fm-platform-lib.sh" "$dir/bin/fm-platform-lib.sh"
@@ -45,22 +55,24 @@ printf '%s\n' selected-sequential-loop
 SH
   chmod +x "$dir/tests/a.test.sh"
 
-  cmd=$(extract_batch_command)
-  [ "$cmd" = "$BATCH_COMMAND" ] || fail "native-Windows batch command drifted"$'\n'"expected: $BATCH_COMMAND"$'\n'"actual:   $cmd"
+  # The platform seam itself is what the retired batch leg gated on; assert the
+  # seam still routes both ways, independent of who invokes it.
+  # shellcheck disable=SC2016 # $t/$rc belong to the inner shell, not this one.
+  local cmd='. ./bin/fm-platform-lib.sh; if fm_platform_is_windows; then ./bin/fm-test-runner-windows.sh; else rc=0; for t in tests/*.test.sh; do echo "== $t =="; bash "$t" || rc=1; done; exit "$rc"; fi'
 
   out=$(cd "$dir" && FM_PLATFORM_IS_WINDOWS=no bash -lc "$cmd" 2>&1)
   status=$?
-  expect_code 0 "$status" "forced-POSIX batch command"
+  expect_code 0 "$status" "forced-POSIX platform seam"
   assert_contains "$out" "== tests/a.test.sh ==" "forced-POSIX branch did not run the sequential loop header"
   assert_contains "$out" "selected-sequential-loop" "forced-POSIX branch did not run the test script"
   assert_not_contains "$out" "selected-windows-runner" "forced-POSIX branch selected the Windows runner"
 
   out=$(cd "$dir" && FM_PLATFORM_IS_WINDOWS=yes bash -lc "$cmd" 2>&1)
   status=$?
-  expect_code 0 "$status" "forced-Windows batch command"
+  expect_code 0 "$status" "forced-Windows platform seam"
   [ "$out" = selected-windows-runner ] || fail "forced-Windows branch did not select the Windows runner: $out"
 
-  pass "native-Windows batch command selects sequential POSIX branch or Windows runner by platform seam"
+  pass "platform seam selects sequential POSIX branch or Windows runner"
 }
 
 test_runner_refuses_non_windows_platform() {
@@ -176,8 +188,9 @@ test_runner_buffers_parallel_output_replays_in_order_and_preserves_rc() {
   pass "fm-test-runner-windows buffers parallel output, replays in order, serializes serial tests, and preserves failure rc"
 }
 
-test_no_mistakes_posix_command_is_literal_upstream_loop
-test_no_mistakes_batch_command_selects_windows_or_posix_branch
+test_no_mistakes_does_not_redispatch_the_windows_lane
+test_ci_windows_job_runs_the_windows_runner
+test_runner_selects_windows_or_posix_branch_by_platform_seam
 test_runner_refuses_non_windows_platform
 test_runner_fails_when_test_glob_is_empty
 test_runner_buffers_parallel_output_replays_in_order_and_preserves_rc
