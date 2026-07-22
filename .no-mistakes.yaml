@@ -9,50 +9,30 @@
 # HEAD-continuity guard; see docs/architecture.md "No-mistakes gate authority boundary."
 disable_project_settings: true
 
-# Pin lint and the portable behavior suite to the same deterministic commands
-# the Linux CI jobs run, instead of leaving them to no-mistakes' default handling.
-# CI separately owns platform-specific compatibility lanes, including the stock
-# macOS Bash snapshot checks. Without a configured
-# commands.lint, the gate's lint step never ran the deterministic
+# Pin lint to the same deterministic command CI runs, instead of leaving it to
+# no-mistakes' default handling. Without a configured commands.lint, the gate's
+# lint step never ran the deterministic
 # `shellcheck bin/*.sh bin/backends/*.sh tests/*.sh` that CI runs, so info-level
 # ShellCheck findings (e.g. SC2015) were not surfaced locally before CI rejected
 # them. commands.lint delegates to bin/fm-lint.sh, the single owner of the lint
 # definition that .github/workflows/ci.yml also invokes, so local can never
 # diverge from CI again (parity asserted by tests/fm-lint.test.sh).
-# The test command mirrors the Linux behavior job in .github/workflows/ci.yml:
-# iterate every tests/*.test.sh, run each, and fail the step if any one exits
-# non-zero (an agent-driven test step has crashed the daemon). The e2e tests need
-# tmux on PATH, which the firstmate environment provides.
+#
+# Do not set commands.test to a complete tests/*.test.sh walk. Local no-mistakes
+# Test is intent-targeted validation of whether the change meets its brief;
+# .github/workflows/ci.yml owns broad regression (behavior suite, platform,
+# security, Herdr, tmux, and lifecycle coverage). A full-suite override here
+# would duplicate CI and defeat the targeted Test contract.
+#
+# Fork note (native-Windows layer): this fork previously carried a batch/sh
+# polyglot override here so a Windows `cmd` invocation of the gate would pin Git
+# Bash off git's own install location instead of PATH/WSL bash. That override is
+# dropped in favor of upstream's intent-targeted contract above. The Windows lane
+# is unaffected: it stays owned by .github/workflows/ci.yml's Git Bash job, which
+# runs bin/fm-test-runner-windows.sh (the same Git-Bash-pinning behavior). Do not
+# reintroduce an override here - tests/fm-nm-test-contract.test.sh enforces it.
 commands:
   lint: 'bin/fm-lint.sh'
-  # Cross-shell dispatch (STRICT ADDITIVE). no-mistakes runs `commands.test` via
-  # `sh` on Linux/macOS but via `cmd` / a temp `.bat` on Windows, where the POSIX
-  # one-liner errors ('rc' is not recognized) and PATH `bash` may be WSL (which
-  # cannot resolve a Windows worktree's .git). So this value is a batch/sh
-  # polyglot:
-  #   - POSIX: the leading `:` is a no-op (`true`), so the exact original one-liner
-  #     runs UNCHANGED. ubuntu CI exercises this path and is the enforcement.
-  #   - Windows: `cmd` reads the `:` lines as labels and runs the batch section,
-  #     which pins Git Bash deterministically off `git`'s OWN install location
-  #     (iterate `where git`, pick the copy whose `..\bin\bash.exe` exists - never
-  #     PATH/WSL bash) and runs the same suite on the LF-normalized scripts.
-  # The batch section is hidden from `sh` inside a quoted here-doc, so `sh` never
-  # parses it. Git-Bash-pinning approach cited in the PR body.
-  test: |
-    :; command -v tmux >/dev/null || { echo "tmux is required for e2e tests" >&2; exit 1; }; tmux -V; rc=0; for t in tests/*.test.sh; do echo "== $t =="; bash "$t" || rc=1; done; exit "$rc"
-    :<<'NMWINBATCH'
-    @echo off
-    setlocal
-    rem Clear MSYS_NO_PATHCONV so Git Bash converts POSIX paths (e.g. `git -C
-    rem /c/...`) to Windows paths for native tools; a stray inherited value would
-    rem break git/treehouse calls inside the suite.
-    set "MSYS_NO_PATHCONV="
-    set "NMBASH="
-    for /f "delims=" %%G in ('where git') do if exist "%%~dpG..\bin\bash.exe" set "NMBASH=%%~dpG..\bin\bash.exe"
-    if not defined NMBASH (echo no-mistakes: could not locate Git Bash from git.exe>&2 & exit /b 1)
-    "%NMBASH%" -c ". ./bin/fm-platform-lib.sh; if fm_platform_is_windows; then ./bin/fm-test-runner-windows.sh; else rc=0; for t in tests/*.test.sh; do echo \"== $t ==\"; bash \"$t\" || rc=1; done; exit \"$rc\"; fi"
-    exit /b %ERRORLEVEL%
-    NMWINBATCH
 
 # Keep test evidence out of this repo; it stays in a temp dir instead.
 test:
